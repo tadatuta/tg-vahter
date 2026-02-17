@@ -34,4 +34,11 @@ if (isServerless) {
 }
 
 // Export handler for Yandex Cloud Functions
-export const handler = webhookCallback(bot, "std/http");
+export const handler = isServerless
+    ? webhookCallback(bot, "std/http")
+    : async () => {
+        return {
+            statusCode: 200,
+            body: "Bot is running in local development mode (long polling). Webhook is disabled.",
+        };
+    };

@@ -41,7 +41,8 @@ export async function handleBan(ctx: Context): Promise<void> {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
-    const adminId = ctx.from!.id;
+    const adminId = ctx.from?.id;
+    if (!adminId) return;
     let targetUserId: number | undefined;
     let reason = "Manual ban by admin";
 
@@ -105,7 +106,7 @@ export async function handleUnban(ctx: Context): Promise<void> {
     }
 
     db.removeFromBlacklist(targetUserId);
-    logger.info(`Admin ${ctx.from!.id} unbanned user ${targetUserId}`);
+    logger.info(`Admin ${ctx.from?.id ?? "unknown"} unbanned user ${targetUserId}`);
 
     await ctx.reply(`Пользователь ${targetUserId} удалён из чёрного списка.`);
 }

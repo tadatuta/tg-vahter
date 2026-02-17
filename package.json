@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --env-file=.env src/index.ts",
     "lint": "eslint src/"
   },
   "dependencies": {
@@ -13,9 +13,13 @@
     "grammy": "^1.35.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.4",
+    "eslint": "^10.0.0",
+    "globals": "^17.3.0",
+    "tsx": "^4.19.3",
     "typescript": "^5.7.3",
-    "tsx": "^4.19.3"
+    "typescript-eslint": "^8.56.0"
   }
 }
