@@ -284,4 +284,32 @@ describe("e2e bot flow", () => {
         );
         assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
     });
+
+    test("E2E-05: implicit join — first message from unknown user is checked, second is skipped", async () => {
+        // User 1005 never sent a join event (bot joined after them)
+        await bot.handleUpdate(messageUpdate(40, {
+            from: user(1005),
+            text: "hi from existing member",
+        }) as never);
+
+        // Should register as implicit join and approve clean message
+        assert.equal(db.isNewUser(1005, -1000), false);
+        assert.equal(db.isSpammer(1005), false);
+        assert.equal(
+            countRows("SELECT COUNT(*) AS cnt FROM message_log WHERE user_id = 1005 AND chat_id = -1000"),
+            1
+        );
+
+        // Second message should be skipped entirely
+        await bot.handleUpdate(messageUpdate(41, {
+            from: user(1005),
+            text: "second message",
+        }) as never);
+
+        assert.equal(
+            countRows("SELECT COUNT(*) AS cnt FROM message_log WHERE user_id = 1005 AND chat_id = -1000"),
+            1
+        );
+        assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
+    });
 });

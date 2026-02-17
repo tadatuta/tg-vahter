@@ -76,6 +76,9 @@ function stmts() {
         isSpammer: db.prepare<[number], { cnt: number }>(
             "SELECT COUNT(*) as cnt FROM spammers WHERE user_id = ?"
         ),
+        hasLoggedMessage: db.prepare<[number, number], { cnt: number }>(
+            "SELECT COUNT(*) as cnt FROM message_log WHERE user_id = ? AND chat_id = ?"
+        ),
         isAdmin: db.prepare<[number], { cnt: number }>(
             "SELECT COUNT(*) as cnt FROM admins WHERE user_id = ?"
         ),
@@ -84,6 +87,9 @@ function stmts() {
         ),
         removeNewUser: db.prepare(
             "DELETE FROM new_users WHERE user_id = ? AND chat_id = ?"
+        ),
+        removeSpammer: db.prepare(
+            "DELETE FROM spammers WHERE user_id = ?"
         ),
         addSpammer: db.prepare(
             "INSERT OR REPLACE INTO spammers (user_id, username, reason) VALUES (?, ?, ?)"
@@ -123,8 +129,12 @@ export function isNewUser(userId: number, chatId: number): boolean {
 }
 
 export function isKnownUser(userId: number, chatId: number): boolean {
-    // A user is "known" if they are neither in new_users nor in spammers
-    return !isNewUser(userId, chatId) && !isSpammer(userId);
+    // A user is "known" if they have already had a message approved in this chat
+    return hasLoggedMessage(userId, chatId);
+}
+
+export function hasLoggedMessage(userId: number, chatId: number): boolean {
+    return (stmts().hasLoggedMessage.get(userId, chatId)?.cnt ?? 0) > 0;
 }
 
 export function isSpammer(userId: number): boolean {
@@ -146,6 +156,10 @@ export function addNewUser(
 
 export function removeNewUser(userId: number, chatId: number): void {
     stmts().removeNewUser.run(userId, chatId);
+}
+
+export function removeSpammer(userId: number): void {
+    stmts().removeSpammer.run(userId);
 }
 
 export function addSpammer(

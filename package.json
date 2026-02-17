@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx --env-file=.env src/index.ts",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "test": "node --test --test-concurrency=1 --import tsx test/**/*.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

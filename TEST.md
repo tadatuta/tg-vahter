@@ -74,11 +74,20 @@
 46. `E2E-03 (P0)` ручной `/ban` -> следующее сообщение пользователя банится сразу.
 47. `E2E-04 (P1)` рестарт процесса сохраняет состояние DB и корректно продолжает.
 
-## Критические риски, которые тесты должны явно фиксировать
+## Критические риски (результаты анализа)
 
-1. Ветка “implicit join” в `/Users/tadatuta/projects/tg-antispam-bot/src/handlers/message.ts:47` конфликтует с `isKnownUser` в `/Users/tadatuta/projects/tg-antispam-bot/src/db/index.ts:125`; нужен отдельный `P0` тест как регрессионный.
-2. Спамер пишется в `spammers`, но не в `blacklist`; нужно зафиксировать ожидаемое поведение продуктово.
-3. `/unban` снимает только blacklist-запись, но не делает `unbanChatMember`; это тоже зафиксировать как ожидаемое/неожидаемое поведение.
+1. ~~Ветка “implicit join” конфликтует с `isKnownUser`~~ — **ИСПРАВЛЕНО**: `isKnownUser` теперь проверяет `message_log`. Тесты: `MSG-10`, `MSG-10b`, `DB-10`, `E2E-05`.
+2. ~~Спамер пишется в `spammers`, но не в `blacklist`~~ — **Ожидаемое поведение**: `spammers` — автоматика, `blacklist` — ручные баны. Тест: `MSG-11`.
+3. ~~`/unban` не делает `unbanChatMember`~~ — **ИСПРАВЛЕНО**: `/unban` теперь вызывает `unbanChatMember` и `removeSpammer`. Тесты: `ADM-08`, `ADM-12`.
+
+## Дополнительные тесты
+
+48. `MSG-10 (P0)` implicit join: пользователь без join-события получает проверку хэвристиками.
+49. `MSG-10b (P0)` implicit join + spam → бан.
+50. `MSG-11 (P1)` spam → в `spammers`, НЕ в `blacklist`.
+51. `DB-10 (P0)` `hasLoggedMessage` возвращает корректное состояние.
+52. `ADM-12 (P1)` `/unban` вызывает `unbanChatMember` и удаляет из `spammers`.
+53. `E2E-05 (P0)` implicit join flow: первое сообщение → проверка → второе сообщение skip.
 
 ## Порядок внедрения
 

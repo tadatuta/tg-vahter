@@ -106,7 +106,18 @@ export async function handleUnban(ctx: Context): Promise<void> {
     }
 
     db.removeFromBlacklist(targetUserId);
+    db.removeSpammer(targetUserId);
     logger.info(`Admin ${ctx.from?.id ?? "unknown"} unbanned user ${targetUserId}`);
+
+    // Unban in the current chat
+    const chatId = ctx.chat?.id;
+    if (chatId) {
+        try {
+            await ctx.api.unbanChatMember(chatId, targetUserId, { only_if_banned: true });
+        } catch {
+            // User might not be in this chat
+        }
+    }
 
     await ctx.reply(`Пользователь ${targetUserId} удалён из чёрного списка.`);
 }

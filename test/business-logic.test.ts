@@ -60,6 +60,7 @@ function patchEnv(t: TestContext, vars: Record<string, string | undefined>): voi
 
 type CallLog = {
     bans: Array<{ chatId: number; userId: number }>;
+    unbans: Array<{ chatId: number; userId: number }>;
     deletes: Array<{ chatId: number; messageId: number }>;
     getChatMember: Array<{ chatId: number; userId: number }>;
     replies: string[];
@@ -78,6 +79,7 @@ function createMockContext(
 ): { ctx: Record<string, unknown>; calls: CallLog } {
     const calls: CallLog = {
         bans: [],
+        unbans: [],
         deletes: [],
         getChatMember: [],
         replies: [],
@@ -95,6 +97,9 @@ function createMockContext(
             if (behavior.failDelete) {
                 throw new Error("delete failed");
             }
+        },
+        unbanChatMember: async (chatId: number, userId: number) => {
+            calls.unbans.push({ chatId, userId });
         },
         getChatMember: async (chatId: number, userId: number) => {
             calls.getChatMember.push({ chatId, userId });
@@ -273,18 +278,36 @@ describe("database", () => {
         }
     });
 
-    test("DB-09: current isKnownUser matrix", (t) => {
+    test("DB-09: isKnownUser matrix — known only when message_log exists", (t) => {
         setupDb(t);
 
-        // Current behavior: user absent in new_users and spammers is treated as known.
-        assert.equal(db.isKnownUser(30, 100), true);
+        // User absent everywhere is NOT known (no approved message in log)
+        assert.equal(db.isKnownUser(30, 100), false);
 
+        // User in new_users but no message_log — not known
         db.addNewUser(30, 100, "u30", "User30");
         assert.equal(db.isKnownUser(30, 100), false);
 
+        // User with a logged message — known
         db.removeNewUser(30, 100);
+        db.logMessage(30, 100, "approved message");
+        assert.equal(db.isKnownUser(30, 100), true);
+
+        // Spammer with logged message — still known (message_log check only)
         db.addSpammer(30, "u30", "spam");
-        assert.equal(db.isKnownUser(30, 100), false);
+        assert.equal(db.isKnownUser(30, 100), true);
+    });
+
+    test("DB-10: hasLoggedMessage returns correct state", (t) => {
+        setupDb(t);
+
+        assert.equal(db.hasLoggedMessage(40, 100), false);
+
+        db.logMessage(40, 100, "first message");
+        assert.equal(db.hasLoggedMessage(40, 100), true);
+
+        // Different chat — no message logged
+        assert.equal(db.hasLoggedMessage(40, 200), false);
     });
 });
 
@@ -465,6 +488,59 @@ describe("message handler", () => {
         assert.equal(second.calls.bans.length, 0);
     });
 
+    test("MSG-10 (P0): implicit join — user without join event gets heuristic check", async (t) => {
+        setupDb(t);
+        initHeuristics("spam");
+
+        // User has no new_users record and no message_log — implicit join
+        const { ctx, calls } = createMockContext({
+            from: { id: 350, is_bot: false, username: "u350", first_name: "U350" },
+            message: { message_id: 80, text: "hello" },
+        });
+
+        await handleMessage(ctx as never);
+
+        // Should be registered as new user, checked by heuristics, and approved
+        assert.equal(db.isNewUser(350, -500), false);
+        assert.equal(db.isSpammer(350), false);
+        assert.equal(calls.bans.length, 0);
+
+        // The message should have been logged
+        assert.equal(db.hasLoggedMessage(350, -500), true);
+    });
+
+    test("MSG-10b (P0): implicit join with spam is caught", async (t) => {
+        setupDb(t);
+        initHeuristics("spam");
+
+        // User has no new_users record, no message_log — sends spam
+        const { ctx, calls } = createMockContext({
+            from: { id: 351, is_bot: false, username: "u351", first_name: "U351" },
+            message: { message_id: 81, text: "buy spam now" },
+        });
+
+        await handleMessage(ctx as never);
+
+        assert.equal(db.isSpammer(351), true);
+        assert.equal(calls.bans.length, 1);
+    });
+
+    test("MSG-11 (P1): spam adds to spammers but NOT to blacklist", async (t) => {
+        setupDb(t);
+        initHeuristics("spam");
+        db.addNewUser(360, -500, "u360", "U360");
+
+        const { ctx } = createMockContext({
+            from: { id: 360, is_bot: false, username: "u360", first_name: "U360" },
+            message: { message_id: 82, text: "this is spam" },
+        });
+
+        await handleMessage(ctx as never);
+
+        assert.equal(db.isSpammer(360), true);
+        assert.equal(db.isBlacklisted(360), false);
+    });
+
     test("MSG-06/07: caption is checked, empty text/caption logs null", async (t) => {
         const dbPath = setupDb(t);
         initHeuristics("spam");
@@ -604,6 +680,9 @@ describe("admin handlers", () => {
 
         await handleUnban(valid.ctx as never);
         assert.equal(db.isBlacklisted(402), false);
+        // Should call unbanChatMember
+        assert.equal(valid.calls.unbans.length, 1);
+        assert.equal(valid.calls.unbans[0].userId, 402);
 
         const invalid = createMockContext({
             from: { id: 777, is_bot: false, username: "admin", first_name: "Admin" },
@@ -613,6 +692,28 @@ describe("admin handlers", () => {
         await handleUnban(invalid.ctx as never);
         assert.equal(invalid.calls.replies.length, 1);
         assert.match(invalid.calls.replies[0], /Некорректный user_id/);
+    });
+
+    test("ADM-12 (P1): /unban also removes spammer record", async (t) => {
+        setupDb(t);
+        patchEnv(t, {
+            BOT_TOKEN: "test-token",
+            ADMIN_IDS: "777",
+        });
+
+        db.addToBlacklist(403, 777, "manual");
+        db.addSpammer(403, "u403", "heuristic");
+
+        const { ctx, calls } = createMockContext({
+            from: { id: 777, is_bot: false, username: "admin", first_name: "Admin" },
+            message: { message_id: 74, text: "/unban 403" },
+        });
+
+        await handleUnban(ctx as never);
+
+        assert.equal(db.isBlacklisted(403), false);
+        assert.equal(db.isSpammer(403), false);
+        assert.equal(calls.unbans.length, 1);
     });
 
     test("ADM-10: /addadmin is allowed only for super-admins", async (t) => {
