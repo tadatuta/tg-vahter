@@ -47,8 +47,19 @@ export async function handleBan(ctx: Context): Promise<void> {
     let reason = "Manual ban by admin";
 
     // Try to get user from reply
-    if (ctx.message?.reply_to_message?.from) {
-        targetUserId = ctx.message.reply_to_message.from.id;
+    const reply = ctx.message?.reply_to_message;
+    if (reply?.from) {
+        targetUserId = reply.from.id;
+
+        // Log and delete the message
+        const messageText = reply.text || reply.caption || "[Non-text message]";
+        logger.info(`Banning user ${targetUserId} for message: "${messageText}"`);
+
+        try {
+            await ctx.api.deleteMessage(chatId, reply.message_id);
+        } catch (e) {
+            logger.warn(`Failed to delete message ${reply.message_id} from user ${targetUserId}: ${e}`);
+        }
     }
 
     // Try to get user from command arguments
