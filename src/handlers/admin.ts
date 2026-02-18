@@ -32,10 +32,10 @@ async function isAuthorized(ctx: Context): Promise<boolean> {
 }
 
 /**
- * /ban command — adds a user to the blacklist.
- * Usage: `/ban <user_id>` or reply to a message with `/ban`
+ * /spam command — adds a user to the blacklist.
+ * Usage: `/spam <user_id>` or reply to a message with `/spam`
  */
-export async function handleBan(ctx: Context): Promise<void> {
+export async function handleSpam(ctx: Context): Promise<void> {
     if (!(await isAuthorized(ctx))) return;
 
     const chatId = ctx.chat?.id;
@@ -78,7 +78,7 @@ export async function handleBan(ctx: Context): Promise<void> {
     }
 
     if (!targetUserId) {
-        await ctx.reply("Использование: /ban <user_id> [причина] или ответом на сообщение");
+        await ctx.reply("Использование: /spam <user_id> [причина] или ответом на сообщение");
         return;
     }
 
@@ -96,17 +96,17 @@ export async function handleBan(ctx: Context): Promise<void> {
 }
 
 /**
- * /unban command — removes a user from the blacklist.
- * Usage: `/unban <user_id>`
+ * /unspam command — removes a user from the blacklist.
+ * Usage: `/unspam <user_id>`
  */
-export async function handleUnban(ctx: Context): Promise<void> {
+export async function handleUnspam(ctx: Context): Promise<void> {
     if (!(await isAuthorized(ctx))) return;
 
     const text = ctx.message?.text ?? "";
     const parts = text.split(/\s+/);
 
     if (parts.length < 2) {
-        await ctx.reply("Использование: /unban <user_id>");
+        await ctx.reply("Использование: /unspam <user_id>");
         return;
     }
 

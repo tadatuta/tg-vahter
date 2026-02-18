@@ -223,14 +223,14 @@ describe("e2e bot flow", () => {
         assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 1);
     });
 
-    test("E2E-03: /ban command blacklists user and next message is blocked", async () => {
+    test("E2E-03: /spam command blacklists user and next message is blocked", async () => {
         await bot.handleUpdate(messageUpdate(20, {
             from: user(9001, "superadmin"),
-            text: "/ban 1003 repeated spam links",
+            text: "/spam 1003 repeated spam links",
             entities: [
                 {
                     offset: 0,
-                    length: 4,
+                    length: 5,
                     type: "bot_command",
                 },
             ],

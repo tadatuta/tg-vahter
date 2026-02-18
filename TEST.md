@@ -62,16 +62,16 @@
 34. `ADM-02 (P0)` авторизация: admin из таблицы `admins`.
 35. `ADM-03 (P0)` авторизация: chat admin через `getChatMember`.
 36. `ADM-04 (P1)` ошибка `getChatMember` -> неавторизован.
-37. `ADM-05 (P0)` `/ban` по reply: пользователь попадает в blacklist.
-38. `ADM-06 (P0)` `/ban <id> [reason]`: парсинг и сохранение reason.
-39. `ADM-07 (P1)` `/ban` без id -> usage message.
-40. `ADM-08 (P0)` `/unban <id>` удаляет из blacklist и отвечает в чат.
-41. `ADM-09 (P1)` `/unban` невалидный id -> сообщение об ошибке.
+37. `ADM-05 (P0)` `/spam` по reply: пользователь попадает в blacklist.
+38. `ADM-06 (P0)` `/spam <id> [reason]`: парсинг и сохранение reason.
+39. `ADM-07 (P1)` `/spam` без id -> usage message.
+40. `ADM-08 (P0)` `/unspam <id>` удаляет из blacklist и отвечает в чат.
+41. `ADM-09 (P1)` `/unspam` невалидный id -> сообщение об ошибке.
 42. `ADM-10 (P0)` `/addadmin` доступен только super-admin.
 43. `ADM-11 (P1)` `/status` возвращает корректные числа из DB.
 44. `E2E-01 (P0)` join -> clean first message -> second message skip.
 45. `E2E-02 (P0)` join -> spam first message -> бан и удаление.
-46. `E2E-03 (P0)` ручной `/ban` -> следующее сообщение пользователя банится сразу.
+46. `E2E-03 (P0)` ручной `/spam` -> следующее сообщение пользователя банится сразу.
 47. `E2E-04 (P1)` рестарт процесса сохраняет состояние DB и корректно продолжает.
 
 ## Критические риски (результаты анализа)

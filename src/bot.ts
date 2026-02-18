@@ -6,8 +6,8 @@ import { initLogger, logger } from "./logger";
 import { handleNewMember } from "./handlers/newMember";
 import { handleMessage } from "./handlers/message";
 import {
-    handleBan,
-    handleUnban,
+    handleSpam,
+    handleUnspam,
     handleAddAdmin,
     handleStatus,
 } from "./handlers/admin";
@@ -31,8 +31,8 @@ bot.catch((err) => {
 });
 
 // --- Admin commands (registered BEFORE generic handlers) ---
-bot.command("ban", handleBan);
-bot.command("unban", handleUnban);
+bot.command("spam", handleSpam);
+bot.command("unspam", handleUnspam);
 bot.command("addadmin", handleAddAdmin);
 bot.command("status", handleStatus);
 

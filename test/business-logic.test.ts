@@ -13,9 +13,9 @@ import { handleNewMember } from "../src/handlers/newMember";
 import { handleMessage } from "../src/handlers/message";
 import {
     handleAddAdmin,
-    handleBan,
+    handleSpam,
     handleStatus,
-    handleUnban,
+    handleUnspam,
 } from "../src/handlers/admin";
 
 function setupDb(t: TestContext): string {
@@ -628,7 +628,7 @@ describe("admin handlers", () => {
             message: { message_id: 70, text: "/ban 401 repeated spam" },
         });
 
-        await handleBan(ctx as never);
+        await handleSpam(ctx as never);
 
         assert.equal(db.isBlacklisted(401), true);
         assert.equal(calls.bans.length, 1);
@@ -658,10 +658,10 @@ describe("admin handlers", () => {
             message: { message_id: 71, text: "/ban" },
         });
 
-        await handleBan(ctx as never);
+        await handleSpam(ctx as never);
 
         assert.equal(calls.replies.length, 1);
-        assert.match(calls.replies[0], /Использование: \/ban/);
+        assert.match(calls.replies[0], /Использование: \/spam/);
     });
 
     test("ADM-08/09: /unban removes blacklist and validates input", async (t) => {
@@ -678,7 +678,7 @@ describe("admin handlers", () => {
             message: { message_id: 72, text: "/unban 402" },
         });
 
-        await handleUnban(valid.ctx as never);
+        await handleUnspam(valid.ctx as never);
         assert.equal(db.isBlacklisted(402), false);
         // Should call unbanChatMember
         assert.equal(valid.calls.unbans.length, 1);
@@ -689,7 +689,7 @@ describe("admin handlers", () => {
             message: { message_id: 73, text: "/unban abc" },
         });
 
-        await handleUnban(invalid.ctx as never);
+        await handleUnspam(invalid.ctx as never);
         assert.equal(invalid.calls.replies.length, 1);
         assert.match(invalid.calls.replies[0], /Некорректный user_id/);
     });
@@ -709,7 +709,7 @@ describe("admin handlers", () => {
             message: { message_id: 74, text: "/unban 403" },
         });
 
-        await handleUnban(ctx as never);
+        await handleUnspam(ctx as never);
 
         assert.equal(db.isBlacklisted(403), false);
         assert.equal(db.isSpammer(403), false);

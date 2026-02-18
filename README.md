@@ -19,7 +19,7 @@ tg-antispam-bot/
 │   └── handlers/
 │       ├── newMember.ts      # Join events → blacklist check + registration
 │       ├── message.ts        # First-message pipeline → heuristics → ban/approve
-│       └── admin.ts          # /ban, /unban, /addadmin, /status commands
+│       └── admin.ts          # /spam, /unspam, /addadmin, /status commands
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
