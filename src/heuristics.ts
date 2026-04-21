@@ -10,8 +10,8 @@ export function initHeuristics(regexSource: string): void {
     }
 
     try {
-        spamPattern = new RegExp(regexSource, "iu");
-        logger.info(`Spam regex compiled: /${regexSource}/iu`);
+        spamPattern = new RegExp(regexSource, "i");
+        logger.info(`Spam regex compiled: /${regexSource}/i`);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error(`Invalid SPAM_REGEX: ${message} — heuristic checks disabled`);

@@ -35,7 +35,7 @@ if (isServerless) {
 
 // Export handler for Yandex Cloud Functions
 export const handler = isServerless
-    ? webhookCallback(bot, "std/http")
+    ? webhookCallback(bot, "aws-lambda-async")
     : async () => {
         return {
             statusCode: 200,

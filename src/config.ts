@@ -1,3 +1,5 @@
+const fs = require('fs');
+
 export interface Config {
     botToken: string;
     adminIds: number[];
@@ -19,7 +21,7 @@ export function loadConfig(): Config {
         .map(Number)
         .filter((id) => !Number.isNaN(id));
 
-    const spamRegex = process.env.SPAM_REGEX ?? "";
+    const spamRegex = process.env.SPAM_REGEX || fs.readFileSync("voyahchat-antispam-encoded.txt", "utf8");
     const dbPath = process.env.DB_PATH ?? "/tmp/vahter.db";
     const logFile = process.env.LOG_FILE ?? "/tmp/vahter.log";
 

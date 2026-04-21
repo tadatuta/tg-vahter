@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "deploy": "rm -rf dist && npm run build && cp package* voyahchat-antispam-encoded.txt dist/ && cd dist && zip -r ../dist.zip . && cd ..",
     "dev": "tsx --env-file=.env src/index.ts",
     "lint": "eslint src/",
     "test": "node --test --test-concurrency=1 --import tsx test/**/*.test.ts"
