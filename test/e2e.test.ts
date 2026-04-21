@@ -201,7 +201,7 @@ describe("e2e bot flow", () => {
             1
         );
         assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
-        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 0);
+        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 1);
     });
 
     test("E2E-02: join -> spam first message -> ban and delete", async () => {
@@ -220,7 +220,7 @@ describe("e2e bot flow", () => {
         assert.equal(db.isSpammer(1002), true);
         assert.equal(db.isNewUser(1002, -1000), false);
         assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 1);
-        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 1);
+        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 2);
     });
 
     test("E2E-03: /spam command blacklists user and next message is blocked", async () => {

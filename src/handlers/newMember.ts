@@ -33,6 +33,13 @@ export async function handleNewMember(ctx: Context): Promise<void> {
     const newMembers = ctx.message?.new_chat_members;
     if (!newMembers) return;
 
+    // Delete the "user joined" service message
+    try {
+        await ctx.deleteMessage();
+    } catch {
+        // may fail if message is already deleted or bot lacks perms
+    }
+
     for (const user of newMembers) {
         if (user.is_bot) continue;
         await processJoin(ctx, user.id, chatId, user.username, user.first_name);
