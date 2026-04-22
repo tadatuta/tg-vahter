@@ -253,9 +253,9 @@ describe("e2e bot flow", () => {
             text: "why i am banned?",
         }) as never);
 
-        assert.equal(apiCalls.filter((x) => x.method === "sendMessage").length, 1);
+        assert.equal(apiCalls.filter((x) => x.method === "sendMessage").length, 0);
         assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 2);
-        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 1);
+        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 2);
     });
 
     test("E2E-04: state persists after db reinit on same file (restart simulation)", async () => {

@@ -129,6 +129,14 @@ function createMockContext(
         reply: async (text: string) => {
             calls.replies.push(text);
         },
+        deleteMessage: async () => {
+            const cId = (ctx.chat as { id: number })?.id ?? -500;
+            const mId = (ctx.message as { message_id: number })?.message_id ?? 10;
+            calls.deletes.push({ chatId: cId, messageId: mId });
+            if (behavior.failDelete) {
+                throw new Error("delete failed");
+            }
+        },
         ...overrides,
     };
 
@@ -632,7 +640,8 @@ describe("admin handlers", () => {
 
         assert.equal(db.isBlacklisted(401), true);
         assert.equal(calls.bans.length, 1);
-        assert.equal(calls.replies.length, 1);
+        assert.equal(calls.replies.length, 0);
+        assert.equal(calls.deletes.length, 1);
 
         const conn = new Database(dbPath, { readonly: true });
         try {
