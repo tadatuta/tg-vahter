@@ -63,9 +63,10 @@ export async function handleSpam(ctx: Context): Promise<void> {
     }
 
     // Try to get user from command arguments
+    const text = ctx.message?.text ?? "";
+    const parts = text.split(/\s+/);
+
     if (!targetUserId) {
-        const text = ctx.message?.text ?? "";
-        const parts = text.split(/\s+/);
         if (parts.length >= 2) {
             const parsed = Number(parts[1]);
             if (!Number.isNaN(parsed)) {
@@ -74,6 +75,11 @@ export async function handleSpam(ctx: Context): Promise<void> {
         }
         if (parts.length >= 3) {
             reason = parts.slice(2).join(" ");
+        }
+    } else {
+        // If we got targetUserId from reply, the rest of the text is the reason
+        if (parts.length >= 2) {
+            reason = parts.slice(1).join(" ");
         }
     }
 
