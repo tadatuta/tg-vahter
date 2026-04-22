@@ -98,7 +98,11 @@ export async function handleSpam(ctx: Context): Promise<void> {
         // User might not be in this chat
     }
 
-    await ctx.reply(`Пользователь ${targetUserId} добавлен в чёрный список.`);
+    try {
+        await ctx.deleteMessage();
+    } catch {
+        // may fail if message is already deleted or bot lacks perms
+    }
 }
 
 /**
