@@ -230,6 +230,13 @@ describe("heuristics", () => {
         assert.equal(isSpam("преведmedведед"), true);
         assert.equal(isSpam("чистый текст"), false);
     });
+
+    test("H-08: Telegram private invite links are spam before other checks", () => {
+        initHeuristics("");
+        assert.equal(isSpam("Вступайте: https://t.me/+AbCdEf123"), true);
+        assert.equal(isSpam("T.ME/+AbCdEf123"), true);
+        assert.equal(isSpam("https://t.me/example_channel"), false);
+    });
 });
 
 describe("database", () => {

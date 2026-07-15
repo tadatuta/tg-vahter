@@ -2,6 +2,9 @@ import { logger } from "./logger";
 
 let spamPattern: RegExp | null = null;
 
+// Telegram private invite links must always be treated as spam, regardless of SPAM_REGEX.
+const telegramInviteLinkRegex = /t\.me\/\+/i;
+
 // Latin characters inside a word that starts and ends with Cyrillic
 const latinInsideCyrillicRegex = /[а-яёА-ЯЁ][а-яёА-ЯЁa-zA-Z]*[a-zA-Z][а-яёА-ЯЁa-zA-Z]*[а-яёА-ЯЁ]/;
 
@@ -73,10 +76,13 @@ export function hasLatinInsideCyrillicWord(text: string): boolean {
 export function isSpam(text: string | undefined): boolean {
     if (!text) return false;
 
-    // Preliminary check 1: characters outside allowed ranges
+    // Preliminary check 1: Telegram private invite links
+    if (telegramInviteLinkRegex.test(text)) return true;
+
+    // Preliminary check 2: characters outside allowed ranges
     if (hasNonAllowedCharacters(text)) return true;
 
-    // Preliminary check 2: Latin inside Cyrillic word
+    // Preliminary check 3: Latin inside Cyrillic word
     if (hasLatinInsideCyrillicWord(text)) return true;
 
     // Existing regex-based check
