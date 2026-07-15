@@ -7,7 +7,12 @@ import type { TestContext } from "node:test";
 import Database from "better-sqlite3";
 
 import { loadConfig } from "../src/config";
-import { initHeuristics, isSpam } from "../src/heuristics";
+import {
+    hasLatinInsideCyrillicWord,
+    hasNonAllowedCharacters,
+    initHeuristics,
+    isSpam,
+} from "../src/heuristics";
 import * as db from "../src/db";
 import { handleNewMember } from "../src/handlers/newMember";
 import { handleMessage } from "../src/handlers/message";
@@ -198,6 +203,32 @@ describe("heuristics", () => {
         assert.equal(isSpam("Это СПАМ сообщение"), true);
         assert.equal(isSpam("чистый текст"), false);
         assert.equal(isSpam(undefined), false);
+    });
+
+    test("H-05: hasNonAllowedCharacters detects non-ASCII/ Cyrillic/ emoji chars", () => {
+        assert.equal(hasNonAllowedCharacters("hello world"), false);
+        assert.equal(hasNonAllowedCharacters("Привет мир"), false);
+        assert.equal(hasNonAllowedCharacters("hello \u{1F680}"), false);
+        assert.equal(hasNonAllowedCharacters("китайские 中文 символы"), true);
+        assert.equal(hasNonAllowedCharacters("арабский العربية текст"), true);
+        assert.equal(hasNonAllowedCharacters(""), false);
+    });
+
+    test("H-06: hasLatinInsideCyrillicWord detects Latin within Cyrillic words", () => {
+        assert.equal(hasLatinInsideCyrillicWord("привет"), false);
+        assert.equal(hasLatinInsideCyrillicWord("hello"), false);
+        assert.equal(hasLatinInsideCyrillicWord("преведmedведед"), true);
+        assert.equal(hasLatinInsideCyrillicWord("helloпривет"), false);
+        assert.equal(hasLatinInsideCyrillicWord("приветhello"), false);
+        assert.equal(hasLatinInsideCyrillicWord("привет123"), false);
+        assert.equal(hasLatinInsideCyrillicWord(""), false);
+    });
+
+    test("H-07: isSpam runs new checks before regex", () => {
+        initHeuristics("");
+        assert.equal(isSpam("китайские 中文 символы"), true);
+        assert.equal(isSpam("преведmedведед"), true);
+        assert.equal(isSpam("чистый текст"), false);
     });
 });
 
