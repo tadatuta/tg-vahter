@@ -1,7 +1,11 @@
 import type { Context } from "grammy";
 import * as db from "../db";
 import { isSpam } from "../heuristics";
-import { logger } from "../logger";
+import { logger, serializeError } from "../logger";
+import {
+    getContextLogFields,
+    logDecision,
+} from "../observability";
 
 /**
  * Handles regular messages in group chats.
@@ -20,15 +24,31 @@ export async function handleMessage(ctx: Context): Promise<void> {
     const chat = ctx.chat;
     const message = ctx.message;
 
-    if (!user || !chat || !message) return;
-    if (user.is_bot) return;
+    if (!user || !chat || !message) {
+        logDecision(ctx, "skip", "missing_message_context", {
+            has_user: user !== undefined,
+            has_chat: chat !== undefined,
+            has_message: message !== undefined,
+        });
+        return;
+    }
+    if (user.is_bot) {
+        logDecision(ctx, "skip", "sender_is_bot");
+        return;
+    }
 
     // Only process group/supergroup messages
-    if (chat.type !== "group" && chat.type !== "supergroup") return;
+    if (chat.type !== "group" && chat.type !== "supergroup") {
+        logDecision(ctx, "skip", "unsupported_chat_type");
+        return;
+    }
 
     // Skip service messages that don't carry user content
     // (new_chat_members is handled separately)
-    if (message.new_chat_members || message.left_chat_member) return;
+    if (message.new_chat_members || message.left_chat_member) {
+        logDecision(ctx, "skip", "membership_service_message");
+        return;
+    }
 
     const userId = user.id;
     const chatId = chat.id;
@@ -36,19 +56,30 @@ export async function handleMessage(ctx: Context): Promise<void> {
 
     // 1. Blacklist check
     if (db.isBlacklisted(userId)) {
-        logger.info(`Blacklisted user ${displayName} (${userId}) sent message in ${chatId} — banning`);
+        logDecision(ctx, "ban", "blacklisted_user", {
+            display_name: displayName,
+        }, "warn");
         await banAndDeleteMessages(ctx, userId, chatId);
         return;
     }
 
     // 2. Already verified — do nothing
-    if (db.isKnownUser(userId, chatId)) return;
+    if (db.isKnownUser(userId, chatId)) {
+        logDecision(ctx, "skip", "known_user", {
+            display_name: displayName,
+        });
+        return;
+    }
 
     // 3. If user isn't in new_users, they might have joined without a join message
     //    (e.g., the bot was added after the user joined). Register them now.
     if (!db.isNewUser(userId, chatId)) {
         db.addNewUser(userId, chatId, user.username, user.first_name);
-        logger.info(`Implicit join: ${displayName} (${userId}) registered in chat ${chatId}`);
+        logger.info("Implicit join registered", {
+            event: "user.implicit_join_registered",
+            ...getContextLogFields(ctx),
+            display_name: displayName,
+        });
     }
 
     // 4. First message from a new user — run heuristics
@@ -60,7 +91,10 @@ export async function handleMessage(ctx: Context): Promise<void> {
         db.addSpammer(userId, user.username, reason);
         db.removeNewUser(userId, chatId);
 
-        logger.warn(`SPAM from ${displayName} (${userId}) in ${chatId}: ${messageText?.slice(0, 200)}`);
+        logDecision(ctx, "ban", "spam_heuristic_match", {
+            display_name: displayName,
+            text_preview: messageText?.slice(0, 200),
+        }, "warn");
 
         await banAndDeleteMessages(ctx, userId, chatId);
     } else {
@@ -68,7 +102,11 @@ export async function handleMessage(ctx: Context): Promise<void> {
         db.removeNewUser(userId, chatId);
         db.logMessage(userId, chatId, messageText);
 
-        logger.info(`Approved first message from ${displayName} (${userId}) in ${chatId}`);
+        logDecision(ctx, "approve", "first_message_clean", {
+            display_name: displayName,
+            content_type: messageText === undefined ? "non_text" : "text",
+            text_preview: messageText?.slice(0, 200),
+        });
     }
 }
 
@@ -91,16 +129,44 @@ async function banAndDeleteMessages(
 ): Promise<void> {
     try {
         await ctx.api.banChatMember(chatId, userId);
+        logger.info("User ban succeeded", {
+            event: "telegram_api.ban_chat_member",
+            ...getContextLogFields(ctx),
+            target_user_id: userId,
+            outcome: "success",
+        });
     } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Failed to ban user ${userId} in chat ${chatId}: ${msg}`);
+        logger.error("User ban failed", {
+            event: "telegram_api.ban_chat_member",
+            ...getContextLogFields(ctx),
+            target_user_id: userId,
+            outcome: "failure",
+            error: serializeError(err),
+        });
     }
 
     if (ctx.message?.message_id) {
         try {
             await ctx.api.deleteMessage(chatId, ctx.message.message_id);
-        } catch {
-            // may fail if message is already deleted or bot lacks perms
+            logger.info("Message deletion succeeded", {
+                event: "telegram_api.delete_message",
+                ...getContextLogFields(ctx),
+                outcome: "success",
+            });
+        } catch (err) {
+            logger.error("Message deletion failed", {
+                event: "telegram_api.delete_message",
+                ...getContextLogFields(ctx),
+                outcome: "failure",
+                error: serializeError(err),
+            });
         }
+    } else {
+        logger.warn("Message deletion skipped because message_id is missing", {
+            event: "telegram_api.delete_message",
+            ...getContextLogFields(ctx),
+            outcome: "skipped",
+            reason: "missing_message_id",
+        });
     }
 }

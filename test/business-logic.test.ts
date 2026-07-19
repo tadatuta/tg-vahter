@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+    mkdtempSync,
+    readFileSync,
+    rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { describe } from "node:test";
@@ -22,6 +26,22 @@ import {
     handleStatus,
     handleUnspam,
 } from "../src/handlers/admin";
+import {
+    flushLogger,
+    initLogger,
+    logger,
+} from "../src/logger";
+import {
+    traceUpdate,
+    wrapWebhookHandler,
+} from "../src/observability";
+
+type LogEntry = Record<string, unknown> & {
+    event?: string;
+    decision?: string;
+    reason?: string;
+    outcome?: string;
+};
 
 function setupDb(t: TestContext): string {
     const dir = mkdtempSync(path.join(tmpdir(), "vahter-test-"));
@@ -157,6 +177,144 @@ function readCount(dbPath: string, sql: string): number {
         conn.close();
     }
 }
+
+function setupLogCapture(t: TestContext): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "vahter-log-test-"));
+    const logPath = path.join(dir, "vahter.log");
+    initLogger(logPath);
+
+    t.after(async () => {
+        await flushLogger();
+        initLogger("/tmp/vahter.log");
+        rmSync(dir, { recursive: true, force: true });
+    });
+
+    return logPath;
+}
+
+async function readLogEntries(logPath: string): Promise<LogEntry[]> {
+    await flushLogger();
+    return readFileSync(logPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as LogEntry);
+}
+
+describe("observability", () => {
+    test("LOG-01: logger writes structured JSON to stdout and the configured file", async (t) => {
+        await flushLogger();
+        const logPath = setupLogCapture(t);
+        const originalWrite = process.stdout.write;
+        let stdout = "";
+
+        process.stdout.write = ((chunk: string | Uint8Array) => {
+            stdout += chunk.toString();
+            return true;
+        }) as typeof process.stdout.write;
+
+        try {
+            logger.info("Structured test entry", {
+                event: "test.structured_log",
+                update_id: 123,
+            });
+        } finally {
+            process.stdout.write = originalWrite;
+        }
+
+        const stdoutEntry = JSON.parse(stdout.trim()) as LogEntry;
+        const fileEntries = await readLogEntries(logPath);
+
+        assert.equal(stdoutEntry.event, "test.structured_log");
+        assert.equal(stdoutEntry.update_id, 123);
+        assert.equal(stdoutEntry.level, "INFO");
+        assert.equal(fileEntries.at(-1)?.event, "test.structured_log");
+    });
+
+    test("LOG-02: webhook wrapper logs metadata and rethrows failures", async (t) => {
+        const logPath = setupLogCapture(t);
+        const wrapped = wrapWebhookHandler(async () => {
+            throw new Error("webhook exploded");
+        });
+
+        await assert.rejects(
+            wrapped(
+                {
+                    body: JSON.stringify({
+                        update_id: 456,
+                        message: {
+                            message_id: 789,
+                            chat: { id: -500 },
+                            from: { id: 42 },
+                        },
+                    }),
+                    headers: {},
+                    httpMethod: "POST",
+                },
+                { requestId: "request-1" }
+            ),
+            /webhook exploded/
+        );
+
+        const entries = await readLogEntries(logPath);
+        const received = entries.find((entry) => entry.event === "webhook.received");
+        const failed = entries.find((entry) => entry.event === "webhook.failed");
+
+        assert.equal(received?.request_id, "request-1");
+        assert.equal(received?.update_id, 456);
+        assert.equal(received?.message_id, 789);
+        assert.equal(failed?.update_id, 456);
+        assert.equal((failed?.error as { name?: string })?.name, "Error");
+        assert.equal(
+            (failed?.error as { message?: string })?.message,
+            "webhook exploded"
+        );
+    });
+
+    test("LOG-03: tracing records a fallback decision and duration", async (t) => {
+        const logPath = setupLogCapture(t);
+        const ctx = {
+            update: {
+                update_id: 654,
+                edited_message: {
+                    message_id: 321,
+                    chat: { id: -700, type: "supergroup" },
+                    from: { id: 77, is_bot: false, first_name: "User" },
+                },
+            },
+            msg: {
+                message_id: 321,
+            },
+            chat: {
+                id: -700,
+                type: "supergroup",
+            },
+            from: {
+                id: 77,
+                is_bot: false,
+                first_name: "User",
+            },
+        };
+
+        await traceUpdate(ctx as never, async () => undefined);
+
+        const entries = await readLogEntries(logPath);
+        const decision = entries.find(
+            (entry) =>
+                entry.event === "update.decision" &&
+                entry.update_id === 654
+        );
+        const completed = entries.find(
+            (entry) =>
+                entry.event === "update.completed" &&
+                entry.update_id === 654
+        );
+
+        assert.equal(decision?.decision, "skip");
+        assert.equal(decision?.reason, "no_matching_handler");
+        assert.equal(typeof completed?.duration_ms, "number");
+    });
+});
 
 describe("config", () => {
     test("CFG-01: loadConfig throws when BOT_TOKEN is missing", (t) => {
@@ -503,6 +661,7 @@ describe("message handler", () => {
     });
 
     test("MSG-05/09: clean first message is logged, later messages are skipped", async (t) => {
+        const logPath = setupLogCapture(t);
         const dbPath = setupDb(t);
         initHeuristics("spam");
         db.addNewUser(302, -500, "u302", "U302");
@@ -532,6 +691,16 @@ describe("message handler", () => {
             1
         );
         assert.equal(second.calls.bans.length, 0);
+
+        const entries = await readLogEntries(logPath);
+        const knownUserDecision = entries.find(
+            (entry) =>
+                entry.event === "update.decision" &&
+                entry.decision === "skip" &&
+                entry.reason === "known_user" &&
+                entry.user_id === 302
+        );
+        assert.ok(knownUserDecision);
     });
 
     test("MSG-10 (P0): implicit join — user without join event gets heuristic check", async (t) => {
@@ -645,6 +814,7 @@ describe("message handler", () => {
     });
 
     test("MSG-08: delete failure does not break processing", async (t) => {
+        const logPath = setupLogCapture(t);
         setupDb(t);
         initHeuristics("spam");
         db.addToBlacklist(307, 1, "manual");
@@ -658,6 +828,19 @@ describe("message handler", () => {
         );
 
         await assert.doesNotReject(async () => handleMessage(ctx as never));
+
+        const entries = await readLogEntries(logPath);
+        const deleteFailure = entries.find(
+            (entry) =>
+                entry.event === "telegram_api.delete_message" &&
+                entry.outcome === "failure" &&
+                entry.user_id === 307
+        );
+        assert.ok(deleteFailure);
+        assert.equal(
+            (deleteFailure.error as { message?: string })?.message,
+            "delete failed"
+        );
     });
 });
 

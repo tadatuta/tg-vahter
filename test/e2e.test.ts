@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+    mkdtempSync,
+    readFileSync,
+    rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import type { Bot } from "grammy";
 import Database from "better-sqlite3";
+import { flushLogger } from "../src/logger";
 
 type DbModule = typeof import("../src/db");
 type HeuristicsModule = typeof import("../src/heuristics");
@@ -166,7 +171,8 @@ describe("e2e bot flow", () => {
         heuristics.initHeuristics("spam");
     });
 
-    after(() => {
+    after(async () => {
+        await flushLogger();
         try {
             db.closeDatabase();
         } catch {
@@ -202,6 +208,30 @@ describe("e2e bot flow", () => {
         );
         assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
         assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 1);
+
+        await flushLogger();
+        const logEntries = readFileSync(logPath, "utf-8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const received = logEntries.find(
+            (entry) => entry.event === "update.received" && entry.update_id === 3
+        );
+        const decision = logEntries.find(
+            (entry) =>
+                entry.event === "update.decision" &&
+                entry.update_id === 3 &&
+                entry.decision === "skip" &&
+                entry.reason === "known_user"
+        );
+        const completed = logEntries.find(
+            (entry) => entry.event === "update.completed" && entry.update_id === 3
+        );
+
+        assert.ok(received);
+        assert.ok(decision);
+        assert.equal(typeof completed?.duration_ms, "number");
     });
 
     test("E2E-02: join -> spam first message -> ban and delete", async () => {

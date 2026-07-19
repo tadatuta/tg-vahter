@@ -14,7 +14,12 @@ export function initDatabase(dbPath: string): void {
     db.pragma("foreign_keys = ON");
 
     runMigrations();
-    logger.info(`Database initialized at ${dbPath}`);
+    logger.info("Database initialized", {
+        event: "database.initialized",
+        db_path: dbPath,
+        journal_mode: "WAL",
+        busy_timeout_ms: 5000,
+    });
 }
 
 function runMigrations(): void {

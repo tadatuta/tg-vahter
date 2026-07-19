@@ -1,7 +1,11 @@
 import type { Context } from "grammy";
 import * as db from "../db";
-import { logger } from "../logger";
+import { logger, serializeError } from "../logger";
 import { loadConfig } from "../config";
+import {
+    getContextLogFields,
+    logDecision,
+} from "../observability";
 
 /**
  * Checks if the sender is authorized to use admin commands.
@@ -23,7 +27,15 @@ async function isAuthorized(ctx: Context): Promise<boolean> {
         try {
             const member = await ctx.api.getChatMember(ctx.chat.id, userId);
             return member.status === "administrator" || member.status === "creator";
-        } catch {
+        } catch (error) {
+            logger.warn("Admin authorization lookup failed", {
+                event: "telegram_api.get_chat_member",
+                ...getContextLogFields(ctx),
+                target_user_id: userId,
+                outcome: "failure",
+                flow: "admin_authorization",
+                error: serializeError(error),
+            });
             return false;
         }
     }
@@ -36,13 +48,28 @@ async function isAuthorized(ctx: Context): Promise<boolean> {
  * Usage: `/spam <user_id>` or reply to a message with `/spam`
  */
 export async function handleSpam(ctx: Context): Promise<void> {
-    if (!(await isAuthorized(ctx))) return;
+    if (!(await isAuthorized(ctx))) {
+        logDecision(ctx, "skip", "unauthorized_admin_command", {
+            command: "spam",
+        }, "warn");
+        return;
+    }
 
     const chatId = ctx.chat?.id;
-    if (!chatId) return;
+    if (!chatId) {
+        logDecision(ctx, "skip", "missing_chat", {
+            command: "spam",
+        });
+        return;
+    }
 
     const adminId = ctx.from?.id;
-    if (!adminId) return;
+    if (!adminId) {
+        logDecision(ctx, "skip", "missing_admin_user", {
+            command: "spam",
+        });
+        return;
+    }
     let targetUserId: number | undefined;
     let reason = "Manual ban by admin";
 
@@ -53,12 +80,34 @@ export async function handleSpam(ctx: Context): Promise<void> {
 
         // Log and delete the message
         const messageText = reply.text || reply.caption || "[Non-text message]";
-        logger.info(`Banning user ${targetUserId} for message: "${messageText}"`);
+        logger.info("Admin selected a replied-to message for banning", {
+            event: "admin.spam_target_selected",
+            ...getContextLogFields(ctx),
+            target_user_id: targetUserId,
+            target_message_id: reply.message_id,
+            text_preview: messageText.slice(0, 200),
+        });
 
         try {
             await ctx.api.deleteMessage(chatId, reply.message_id);
-        } catch (e) {
-            logger.warn(`Failed to delete message ${reply.message_id} from user ${targetUserId}: ${e}`);
+            logger.info("Replied-to message deletion succeeded", {
+                event: "telegram_api.delete_message",
+                ...getContextLogFields(ctx),
+                target_user_id: targetUserId,
+                target_message_id: reply.message_id,
+                outcome: "success",
+                flow: "admin_spam_reply",
+            });
+        } catch (error) {
+            logger.error("Replied-to message deletion failed", {
+                event: "telegram_api.delete_message",
+                ...getContextLogFields(ctx),
+                target_user_id: targetUserId,
+                target_message_id: reply.message_id,
+                outcome: "failure",
+                flow: "admin_spam_reply",
+                error: serializeError(error),
+            });
         }
     }
 
@@ -84,24 +133,58 @@ export async function handleSpam(ctx: Context): Promise<void> {
     }
 
     if (!targetUserId) {
+        logDecision(ctx, "skip", "invalid_command_arguments", {
+            command: "spam",
+        });
         await ctx.reply("Использование: /spam <user_id> [причина] или ответом на сообщение");
         return;
     }
 
     db.addToBlacklist(targetUserId, adminId, reason);
-    logger.info(`Admin ${adminId} banned user ${targetUserId}: ${reason}`);
+    logDecision(ctx, "ban", "manual_admin_blacklist", {
+        command: "spam",
+        target_user_id: targetUserId,
+        admin_user_id: adminId,
+        ban_reason: reason,
+    }, "warn");
 
     // Try to ban in current chat
     try {
         await ctx.api.banChatMember(chatId, targetUserId);
-    } catch {
-        // User might not be in this chat
+        logger.info("Admin-requested user ban succeeded", {
+            event: "telegram_api.ban_chat_member",
+            ...getContextLogFields(ctx),
+            target_user_id: targetUserId,
+            outcome: "success",
+            flow: "admin_spam",
+        });
+    } catch (error) {
+        logger.error("Admin-requested user ban failed", {
+            event: "telegram_api.ban_chat_member",
+            ...getContextLogFields(ctx),
+            target_user_id: targetUserId,
+            outcome: "failure",
+            flow: "admin_spam",
+            error: serializeError(error),
+        });
     }
 
     try {
         await ctx.deleteMessage();
-    } catch {
-        // may fail if message is already deleted or bot lacks perms
+        logger.info("Admin command deletion succeeded", {
+            event: "telegram_api.delete_message",
+            ...getContextLogFields(ctx),
+            outcome: "success",
+            flow: "admin_spam_command",
+        });
+    } catch (error) {
+        logger.error("Admin command deletion failed", {
+            event: "telegram_api.delete_message",
+            ...getContextLogFields(ctx),
+            outcome: "failure",
+            flow: "admin_spam_command",
+            error: serializeError(error),
+        });
     }
 }
 
@@ -110,33 +193,63 @@ export async function handleSpam(ctx: Context): Promise<void> {
  * Usage: `/unspam <user_id>`
  */
 export async function handleUnspam(ctx: Context): Promise<void> {
-    if (!(await isAuthorized(ctx))) return;
+    if (!(await isAuthorized(ctx))) {
+        logDecision(ctx, "skip", "unauthorized_admin_command", {
+            command: "unspam",
+        }, "warn");
+        return;
+    }
 
     const text = ctx.message?.text ?? "";
     const parts = text.split(/\s+/);
 
     if (parts.length < 2) {
+        logDecision(ctx, "skip", "invalid_command_arguments", {
+            command: "unspam",
+        });
         await ctx.reply("Использование: /unspam <user_id>");
         return;
     }
 
     const targetUserId = Number(parts[1]);
     if (Number.isNaN(targetUserId)) {
+        logDecision(ctx, "skip", "invalid_target_user_id", {
+            command: "unspam",
+            provided_value: parts[1],
+        });
         await ctx.reply("Некорректный user_id.");
         return;
     }
 
     db.removeFromBlacklist(targetUserId);
     db.removeSpammer(targetUserId);
-    logger.info(`Admin ${ctx.from?.id ?? "unknown"} unbanned user ${targetUserId}`);
+    logDecision(ctx, "unban", "manual_admin_unblacklist", {
+        command: "unspam",
+        target_user_id: targetUserId,
+        admin_user_id: ctx.from?.id,
+    });
 
     // Unban in the current chat
     const chatId = ctx.chat?.id;
     if (chatId) {
         try {
             await ctx.api.unbanChatMember(chatId, targetUserId, { only_if_banned: true });
-        } catch {
-            // User might not be in this chat
+            logger.info("Admin-requested user unban succeeded", {
+                event: "telegram_api.unban_chat_member",
+                ...getContextLogFields(ctx),
+                target_user_id: targetUserId,
+                outcome: "success",
+                flow: "admin_unspam",
+            });
+        } catch (error) {
+            logger.error("Admin-requested user unban failed", {
+                event: "telegram_api.unban_chat_member",
+                ...getContextLogFields(ctx),
+                target_user_id: targetUserId,
+                outcome: "failure",
+                flow: "admin_unspam",
+                error: serializeError(error),
+            });
         }
     }
 
@@ -149,11 +262,19 @@ export async function handleUnspam(ctx: Context): Promise<void> {
  */
 export async function handleAddAdmin(ctx: Context): Promise<void> {
     const userId = ctx.from?.id;
-    if (!userId) return;
+    if (!userId) {
+        logDecision(ctx, "skip", "missing_admin_user", {
+            command: "addadmin",
+        });
+        return;
+    }
 
     // Only super-admins from config can add new admins
     const config = loadConfig();
     if (!config.adminIds.includes(userId)) {
+        logDecision(ctx, "skip", "unauthorized_super_admin_command", {
+            command: "addadmin",
+        }, "warn");
         return;
     }
 
@@ -161,18 +282,29 @@ export async function handleAddAdmin(ctx: Context): Promise<void> {
     const parts = text.split(/\s+/);
 
     if (parts.length < 2) {
+        logDecision(ctx, "skip", "invalid_command_arguments", {
+            command: "addadmin",
+        });
         await ctx.reply("Использование: /addadmin <user_id>");
         return;
     }
 
     const targetUserId = Number(parts[1]);
     if (Number.isNaN(targetUserId)) {
+        logDecision(ctx, "skip", "invalid_target_user_id", {
+            command: "addadmin",
+            provided_value: parts[1],
+        });
         await ctx.reply("Некорректный user_id.");
         return;
     }
 
     db.addAdmin(targetUserId);
-    logger.info(`Super-admin ${userId} added admin ${targetUserId}`);
+    logDecision(ctx, "grant_admin", "super_admin_added_bot_admin", {
+        command: "addadmin",
+        target_user_id: targetUserId,
+        admin_user_id: userId,
+    });
 
     await ctx.reply(`Пользователь ${targetUserId} добавлен как администратор бота.`);
 }
@@ -181,9 +313,18 @@ export async function handleAddAdmin(ctx: Context): Promise<void> {
  * /status command — shows bot statistics.
  */
 export async function handleStatus(ctx: Context): Promise<void> {
-    if (!(await isAuthorized(ctx))) return;
+    if (!(await isAuthorized(ctx))) {
+        logDecision(ctx, "skip", "unauthorized_admin_command", {
+            command: "status",
+        }, "warn");
+        return;
+    }
 
     const stats = db.getStats();
+    logDecision(ctx, "respond", "status_requested", {
+        command: "status",
+        stats,
+    });
 
     const text = [
         "📊 Статистика VahterBot:",
