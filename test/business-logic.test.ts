@@ -12,6 +12,7 @@ import Database from "better-sqlite3";
 
 import { loadConfig } from "../src/config";
 import {
+    getSpamHeuristic,
     hasLatinInsideCyrillicWord,
     hasNonAllowedCharacters,
     initHeuristics,
@@ -363,30 +364,58 @@ describe("heuristics", () => {
         assert.equal(isSpam(undefined), false);
     });
 
-    test("H-05: hasNonAllowedCharacters detects non-ASCII/ Cyrillic/ emoji chars", () => {
+    test("H-05: visible Unicode is allowed and unsafe controls are rejected", () => {
         assert.equal(hasNonAllowedCharacters("hello world"), false);
         assert.equal(hasNonAllowedCharacters("Привет мир"), false);
         assert.equal(hasNonAllowedCharacters("hello \u{1F680}"), false);
-        assert.equal(hasNonAllowedCharacters("китайские 中文 символы"), true);
-        assert.equal(hasNonAllowedCharacters("арабский العربية текст"), true);
+        assert.equal(
+            hasNonAllowedCharacters("«Цена — 100 ₽… № 1; 20 °C; x ≥ y → z»"),
+            false
+        );
+        assert.equal(hasNonAllowedCharacters("Café Łódź, зво\u0301нит"), false);
+        assert.equal(hasNonAllowedCharacters("китайские 中文 символы"), false);
+        assert.equal(hasNonAllowedCharacters("арабский العربية текст"), false);
+        assert.equal(hasNonAllowedCharacters("семья 👨‍👩‍👧‍👦"), false);
+        assert.equal(hasNonAllowedCharacters("keycap 1️⃣"), false);
+        assert.equal(
+            hasNonAllowedCharacters("England 🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"),
+            false
+        );
+        assert.equal(hasNonAllowedCharacters("line one\n\tline two"), false);
+        assert.equal(hasNonAllowedCharacters("zero\u200Bwidth"), true);
+        assert.equal(hasNonAllowedCharacters("bidi\u202Eoverride"), true);
+        assert.equal(hasNonAllowedCharacters("isolated\u200Djoiner"), true);
+        assert.equal(hasNonAllowedCharacters("\u0301leading mark"), true);
+        assert.equal(hasNonAllowedCharacters("isolated \uFE0F selector"), true);
+        assert.equal(hasNonAllowedCharacters("private \uE000 use"), true);
+        assert.equal(hasNonAllowedCharacters("nul\u0000char"), true);
         assert.equal(hasNonAllowedCharacters(""), false);
     });
 
-    test("H-06: hasLatinInsideCyrillicWord detects Latin within Cyrillic words", () => {
+    test("H-06: mixed Latin/Cyrillic words are detected across Unicode", () => {
         assert.equal(hasLatinInsideCyrillicWord("привет"), false);
         assert.equal(hasLatinInsideCyrillicWord("hello"), false);
         assert.equal(hasLatinInsideCyrillicWord("преведmedведед"), true);
-        assert.equal(hasLatinInsideCyrillicWord("helloпривет"), false);
-        assert.equal(hasLatinInsideCyrillicWord("приветhello"), false);
+        assert.equal(hasLatinInsideCyrillicWord("helloпривет"), true);
+        assert.equal(hasLatinInsideCyrillicWord("приветhello"), true);
+        assert.equal(hasLatinInsideCyrillicWord("привéт"), true);
+        assert.equal(hasLatinInsideCyrillicWord("приветｘ"), true);
         assert.equal(hasLatinInsideCyrillicWord("привет123"), false);
+        assert.equal(hasLatinInsideCyrillicWord("зво\u0301нит"), false);
+        assert.equal(hasLatinInsideCyrillicWord("Telegram-канал"), false);
         assert.equal(hasLatinInsideCyrillicWord(""), false);
     });
 
-    test("H-07: isSpam runs new checks before regex", () => {
+    test("H-07: unsafe controls and mixed-script words are spam signals", () => {
         initHeuristics("");
-        assert.equal(isSpam("китайские 中文 символы"), true);
+        assert.equal(isSpam("китайские 中文 символы"), false);
+        assert.equal(isSpam("арабский العربية текст"), false);
+        assert.equal(isSpam("zero\u200Bwidth"), true);
         assert.equal(isSpam("преведmedведед"), true);
         assert.equal(isSpam("чистый текст"), false);
+
+        initHeuristics("spam");
+        assert.equal(isSpam("про сингулярность, свободу воли, цель жизни…"), false);
     });
 
     test("H-08: Telegram private invite links are spam before other checks", () => {
@@ -394,6 +423,24 @@ describe("heuristics", () => {
         assert.equal(isSpam("Вступайте: https://t.me/+AbCdEf123"), true);
         assert.equal(isSpam("T.ME/+AbCdEf123"), true);
         assert.equal(isSpam("https://t.me/example_channel"), false);
+    });
+
+    test("H-09: matching uses NFKC normalization and reports the exact heuristic", () => {
+        initHeuristics("spam");
+        assert.equal(isSpam("ｓｐａｍ"), true);
+        assert.equal(getSpamHeuristic("ｓｐａｍ"), "configured_regex");
+        assert.equal(
+            getSpamHeuristic("https://t.me/+AbCdEf123"),
+            "telegram_private_invite_link"
+        );
+        assert.equal(
+            getSpamHeuristic("zero\u200Bwidth"),
+            "disallowed_unicode_control"
+        );
+        assert.equal(
+            getSpamHeuristic("привéт"),
+            "mixed_latin_cyrillic_word"
+        );
     });
 });
 
@@ -644,7 +691,8 @@ describe("message handler", () => {
     });
 
     test("MSG-04: spam first message adds spammer and removes new_user", async (t) => {
-        setupDb(t);
+        const logPath = setupLogCapture(t);
+        const dbPath = setupDb(t);
         initHeuristics("spam");
         db.addNewUser(301, -500, "u301", "U301");
 
@@ -658,6 +706,26 @@ describe("message handler", () => {
         assert.equal(db.isSpammer(301), true);
         assert.equal(db.isNewUser(301, -500), false);
         assert.equal(calls.bans.length, 1);
+
+        const conn = new Database(dbPath, { readonly: true });
+        try {
+            const row = conn
+                .prepare("SELECT reason FROM spammers WHERE user_id = 301")
+                .get() as { reason: string };
+            assert.match(row.reason, /\(configured_regex\)/);
+        } finally {
+            conn.close();
+        }
+
+        const entries = await readLogEntries(logPath);
+        const decision = entries.find(
+            (entry) =>
+                entry.event === "update.decision" &&
+                entry.decision === "ban" &&
+                entry.reason === "spam_heuristic_match" &&
+                entry.user_id === 301
+        );
+        assert.equal(decision?.spam_heuristic, "configured_regex");
     });
 
     test("MSG-05/09: clean first message is logged, later messages are skipped", async (t) => {

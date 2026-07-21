@@ -12,7 +12,7 @@ tg-antispam-bot/
 │   ├── index.ts              # Dual-mode entry: webhook (YCF) / polling (local)
 │   ├── bot.ts                # Bot instance, middleware pipeline
 │   ├── config.ts             # Typed env config with validation
-│   ├── heuristics.ts         # Regex-based spam detection
+│   ├── heuristics.ts         # Regex + Unicode spam detection
 │   ├── logger.ts             # File-based structured logger
 │   ├── db/
 │   │   └── index.ts          # SQLite service (WAL, prepared statements)
@@ -39,7 +39,7 @@ flowchart TD
     E -- No --> F{"In new_users?"}
     F -- No --> G["Register as new user"]
     G --> H
-    F -- Yes --> H{"Run spam regex"}
+    F -- Yes --> H{"Run spam heuristics"}
     H -- Match --> I["Add to spammers\nBan + Delete"]
     H -- No match --> J["Remove from new_users\nLog message ✅"]
 ```

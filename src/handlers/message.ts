@@ -1,6 +1,6 @@
 import type { Context } from "grammy";
 import * as db from "../db";
-import { isSpam } from "../heuristics";
+import { getSpamHeuristic } from "../heuristics";
 import { logger, serializeError } from "../logger";
 import {
     getContextLogFields,
@@ -85,14 +85,17 @@ export async function handleMessage(ctx: Context): Promise<void> {
     // 4. First message from a new user — run heuristics
     const messageText = extractText(message);
 
-    if (isSpam(messageText)) {
+    const spamHeuristic = getSpamHeuristic(messageText);
+
+    if (spamHeuristic) {
         // SPAM detected
-        const reason = `Spam heuristic match: "${messageText?.slice(0, 200)}"`;
+        const reason = `Spam heuristic match (${spamHeuristic}): "${messageText?.slice(0, 200)}"`;
         db.addSpammer(userId, user.username, reason);
         db.removeNewUser(userId, chatId);
 
         logDecision(ctx, "ban", "spam_heuristic_match", {
             display_name: displayName,
+            spam_heuristic: spamHeuristic,
             text_preview: messageText?.slice(0, 200),
         }, "warn");
 
