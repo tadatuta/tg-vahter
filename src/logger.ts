@@ -4,11 +4,20 @@ import path from "node:path";
 type LogLevel = "INFO" | "WARN" | "ERROR";
 export type LogFields = Record<string, unknown>;
 
-let logFilePath = "/tmp/vahter.log";
+let logFilePath: string | undefined;
 let pendingFileWrite: Promise<void> = Promise.resolve();
+let minimumLevel: LogLevel = "INFO";
 
-export function initLogger(filePath: string): void {
+const LEVEL_WEIGHT: Record<LogLevel, number> = {
+    INFO: 10,
+    WARN: 20,
+    ERROR: 30,
+};
+
+export function initLogger(filePath?: string, level: "info" | "warn" | "error" = "info"): void {
     logFilePath = filePath;
+    minimumLevel = level.toUpperCase() as LogLevel;
+    if (!logFilePath) return;
     const dir = path.dirname(logFilePath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -58,6 +67,7 @@ function writeToConsole(level: LogLevel, line: string): void {
 
 function queueFileWrite(line: string): void {
     const targetPath = logFilePath;
+    if (!targetPath) return;
 
     pendingFileWrite = pendingFileWrite
         .then(() => fs.promises.appendFile(targetPath, line, "utf-8"))
@@ -75,6 +85,7 @@ function queueFileWrite(line: string): void {
 }
 
 function write(level: LogLevel, message: string, fields: LogFields = {}): void {
+    if (LEVEL_WEIGHT[level] < LEVEL_WEIGHT[minimumLevel]) return;
     const line = stringify({
         ...fields,
         timestamp: new Date().toISOString(),
@@ -82,10 +93,10 @@ function write(level: LogLevel, message: string, fields: LogFields = {}): void {
         message,
     }) + "\n";
 
-    // stdout/stderr is the canonical sink in Cloud Functions.
+    // stdout/stderr is the canonical production sink.
     writeToConsole(level, line);
 
-    // Preserve the configured file log without blocking webhook processing.
+    // Optional file output is kept for local diagnostics and tests only.
     queueFileWrite(line);
 }
 

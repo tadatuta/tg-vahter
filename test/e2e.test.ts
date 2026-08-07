@@ -1,345 +1,289 @@
 import assert from "node:assert/strict";
-import {
-    mkdtempSync,
-    readFileSync,
-    rmSync,
-} from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import type { Bot } from "grammy";
-import Database from "better-sqlite3";
 import { flushLogger } from "../src/logger";
 
 type DbModule = typeof import("../src/db");
-type HeuristicsModule = typeof import("../src/heuristics");
 type BotModule = typeof import("../src/bot");
-
-type ApiCall = {
-    method: string;
-    payload: Record<string, unknown>;
-};
+type ApiCall = { method: string; payload: Record<string, unknown> };
 
 const sandboxDir = mkdtempSync(path.join(tmpdir(), "vahter-e2e-"));
 const dbPath = path.join(sandboxDir, "e2e.db");
-const logPath = path.join(sandboxDir, "e2e.log");
 
 let bot: Bot;
 let db: DbModule;
-let heuristics: HeuristicsModule;
 let apiCalls: ApiCall[] = [];
+let failingMethods = new Set<string>();
+
+function user(id: number, username = `u${id}`): Record<string, unknown> {
+    return { id, is_bot: false, first_name: `User${id}`, username };
+}
 
 function messageUpdate(
     updateId: number,
+    from: Record<string, unknown>,
     message: Record<string, unknown>,
-    chatId = -1000
+    chatId = -1000,
+    edited = false
 ): Record<string, unknown> {
     return {
         update_id: updateId,
-        message: {
-            message_id: updateId,
+        [edited ? "edited_message" : "message"]: {
+            message_id: message.message_id ?? updateId,
             date: 1_700_000_000 + updateId,
-            chat: {
-                id: chatId,
-                type: "supergroup",
-                title: "E2E Chat",
-            },
+            chat: { id: chatId, type: "supergroup", title: `Chat ${chatId}` },
+            from,
             ...message,
         },
     };
 }
 
-function user(id: number, username = `u${id}`): Record<string, unknown> {
+function joinUpdate(updateId: number, member: Record<string, unknown>, chatId = -1000) {
     return {
-        id,
-        is_bot: false,
-        first_name: `User${id}`,
-        username,
+        update_id: updateId,
+        chat_member: {
+            chat: { id: chatId, type: "supergroup", title: `Chat ${chatId}` },
+            from: user(9000),
+            date: 1_700_000_000 + updateId,
+            old_chat_member: { user: member, status: "left" },
+            new_chat_member: { user: member, status: "member" },
+        },
     };
 }
 
-function countRows(sql: string): number {
-    const conn = new Database(dbPath, { readonly: true });
-    try {
-        const row = conn.prepare(sql).get() as { cnt: number };
-        return row.cnt;
-    } finally {
-        conn.close();
-    }
-}
-
 function resetDatabase(): void {
-    try {
-        db.closeDatabase();
-    } catch {
-        // ignore first-run cleanup errors
-    }
-
-    rmSync(dbPath, { force: true });
+    try { db.closeDatabase(); } catch { /* first run */ }
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
     db.initDatabase(dbPath);
 }
 
-function installApiInterceptor(): void {
-    (bot.api as unknown as {
-        config: {
-            use: (
-                middleware: (
-                    prev: unknown,
-                    method: string,
-                    payload: Record<string, unknown>
-                ) => Promise<unknown>
-            ) => void;
-        };
-    }).config.use(async (_prev, method: string, payload: Record<string, unknown>) => {
-        apiCalls.push({ method, payload });
+function calls(method: string): ApiCall[] {
+    return apiCalls.filter((call) => call.method === method);
+}
 
-        if (method === "sendMessage") {
+function installApiInterceptor(): void {
+    bot.api.config.use(async (_prev, method, payload) => {
+        apiCalls.push({ method, payload: payload as Record<string, unknown> });
+        if (failingMethods.has(method)) throw new Error(`${method} failed`);
+        if (method === "getMe") {
             return {
                 ok: true,
                 result: {
-                    message_id: 999_999,
-                    date: Math.floor(Date.now() / 1000),
-                    chat: {
-                        id: payload.chat_id as number,
-                        type: "supergroup",
-                    },
-                    text: payload.text as string,
+                    id: 999001,
+                    is_bot: true,
+                    first_name: "TestBot",
+                    username: "test_antispam_bot",
+                    can_join_groups: true,
+                    can_read_all_group_messages: true,
+                    supports_inline_queries: false,
                 },
             };
         }
-
         if (method === "getChatMember") {
             return {
                 ok: true,
                 result: {
                     status: "member",
-                    user: {
-                        id: payload.user_id as number,
-                        is_bot: false,
-                        first_name: "Member",
-                    },
+                    user: { id: payload.user_id as number, is_bot: false, first_name: "Member" },
                 },
             };
         }
-
-        if (method === "getMe") {
+        if (method === "sendMessage") {
             return {
                 ok: true,
                 result: {
-                    id: 999_001,
-                    is_bot: true,
-                    first_name: "TestBot",
-                    username: "test_antispam_bot",
-                    can_join_groups: true,
-                    can_read_all_group_messages: false,
-                    supports_inline_queries: false,
+                    message_id: 999999,
+                    date: 1_700_000_000,
+                    chat: { id: payload.chat_id as number, type: "supergroup" },
+                    text: payload.text as string,
                 },
             };
         }
-
-        return {
-            ok: true,
-            result: true,
-        };
+        return { ok: true, result: true };
     });
 }
 
-describe("e2e bot flow", () => {
+describe("production behavior", () => {
     before(async () => {
+        process.env.NODE_ENV = "test";
         process.env.BOT_TOKEN = "e2e-test-token";
-        process.env.ADMIN_IDS = "9001";
+        process.env.SUPER_ADMIN_IDS = "9001";
         process.env.SPAM_REGEX = "spam";
         process.env.DB_PATH = dbPath;
-        process.env.LOG_FILE = logPath;
+        process.env.LOG_LEVEL = "error";
+        delete process.env.TELEGRAM_PROXY_URL;
+        delete process.env.ALERT_CHAT_ID;
 
-        const dbModule = await import("../src/db");
-        const heuristicsModule = await import("../src/heuristics");
-        const botModule = (await import("../src/bot")) as BotModule;
-
-        db = dbModule;
-        heuristics = heuristicsModule;
+        db = await import("../src/db");
+        const botModule = await import("../src/bot") as BotModule;
         bot = botModule.bot;
-
         installApiInterceptor();
         await bot.init();
-        resetDatabase();
     });
 
     beforeEach(() => {
         apiCalls = [];
+        failingMethods = new Set();
         resetDatabase();
-        heuristics.initHeuristics("spam");
     });
 
     after(async () => {
         await flushLogger();
-        try {
-            db.closeDatabase();
-        } catch {
-            // ignore cleanup errors
-        }
-
+        db.closeDatabase();
         rmSync(sandboxDir, { recursive: true, force: true });
     });
 
-    test("E2E-01: join -> clean first message -> second message ignored", async () => {
-        const newcomer = user(1001);
+    test("first clean message keeps probation; spam in second message is blocked", async () => {
+        const newcomer = user(101);
+        await bot.handleUpdate(messageUpdate(1, newcomer, { text: "hello" }) as never);
+        assert.deepEqual(db.getChatUserState(101, -1000), { approvedMessages: 1, trusted: false });
 
-        await bot.handleUpdate(messageUpdate(1, {
-            from: user(9000, "inviter"),
-            new_chat_members: [newcomer],
-        }) as never);
-
-        await bot.handleUpdate(messageUpdate(2, {
-            from: newcomer,
-            text: "hello everyone",
-        }) as never);
-
-        await bot.handleUpdate(messageUpdate(3, {
-            from: newcomer,
-            text: "second message",
-        }) as never);
-
-        assert.equal(db.isNewUser(1001, -1000), false);
-        assert.equal(db.isSpammer(1001), false);
-        assert.equal(
-            countRows("SELECT COUNT(*) AS cnt FROM message_log WHERE user_id = 1001 AND chat_id = -1000"),
-            1
-        );
-        assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
-        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 1);
-
-        await flushLogger();
-        const logEntries = readFileSync(logPath, "utf-8")
-            .trim()
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => JSON.parse(line) as Record<string, unknown>);
-        const received = logEntries.find(
-            (entry) => entry.event === "update.received" && entry.update_id === 3
-        );
-        const decision = logEntries.find(
-            (entry) =>
-                entry.event === "update.decision" &&
-                entry.update_id === 3 &&
-                entry.decision === "skip" &&
-                entry.reason === "known_user"
-        );
-        const completed = logEntries.find(
-            (entry) => entry.event === "update.completed" && entry.update_id === 3
-        );
-
-        assert.ok(received);
-        assert.ok(decision);
-        assert.equal(typeof completed?.duration_ms, "number");
+        await bot.handleUpdate(messageUpdate(2, newcomer, { text: "buy spam now" }) as never);
+        assert.equal(db.isSpammer(101), true);
+        assert.equal(calls("banChatMember").length, 1);
+        assert.equal(calls("deleteMessage").length, 1);
     });
 
-    test("E2E-02: join -> spam first message -> ban and delete", async () => {
-        const spammer = user(1002);
+    test("two clean messages grant trust and third message is ignored", async () => {
+        const newcomer = user(102);
+        await bot.handleUpdate(messageUpdate(10, newcomer, { text: "hello" }) as never);
+        await bot.handleUpdate(messageUpdate(11, newcomer, { text: "nice to meet you" }) as never);
+        await bot.handleUpdate(messageUpdate(12, newcomer, { text: "spam after trust" }) as never);
 
-        await bot.handleUpdate(messageUpdate(10, {
-            from: user(9000, "inviter"),
-            new_chat_members: [spammer],
-        }) as never);
-
-        await bot.handleUpdate(messageUpdate(11, {
-            from: spammer,
-            text: "BUY SPAM right now",
-        }) as never);
-
-        assert.equal(db.isSpammer(1002), true);
-        assert.equal(db.isNewUser(1002, -1000), false);
-        assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 1);
-        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 2);
+        assert.equal(db.isTrustedUser(102, -1000), true);
+        assert.equal(db.isSpammer(102), false);
+        assert.equal(calls("banChatMember").length, 0);
     });
 
-    test("E2E-03: /spam command blacklists user and next message is blocked", async () => {
-        await bot.handleUpdate(messageUpdate(20, {
-            from: user(9001, "superadmin"),
-            text: "/spam 1003 repeated spam links",
-            entities: [
-                {
-                    offset: 0,
-                    length: 5,
-                    type: "bot_command",
-                },
-            ],
-        }) as never);
+    test("non-text message does not count, caption does", async () => {
+        const newcomer = user(103);
+        await bot.handleUpdate(messageUpdate(20, newcomer, { photo: [] }) as never);
+        assert.equal(db.getChatUserState(103, -1000).approvedMessages, 0);
 
-        assert.equal(db.isBlacklisted(1003), true);
-
-        const conn = new Database(dbPath, { readonly: true });
-        try {
-            const row = conn
-                .prepare("SELECT reason FROM blacklist WHERE user_id = 1003")
-                .get() as { reason: string };
-            assert.equal(row.reason, "repeated spam links");
-        } finally {
-            conn.close();
-        }
-
-        await bot.handleUpdate(messageUpdate(21, {
-            from: user(1003),
-            text: "why i am banned?",
-        }) as never);
-
-        assert.equal(apiCalls.filter((x) => x.method === "sendMessage").length, 0);
-        assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 2);
-        assert.equal(apiCalls.filter((x) => x.method === "deleteMessage").length, 2);
+        await bot.handleUpdate(messageUpdate(21, newcomer, { caption: "clean caption", photo: [] }) as never);
+        assert.equal(db.getChatUserState(103, -1000).approvedMessages, 1);
     });
 
-    test("E2E-04: state persists after db reinit on same file (restart simulation)", async () => {
-        const member = user(1004);
-
-        await bot.handleUpdate(messageUpdate(30, {
-            from: user(9000, "inviter"),
-            new_chat_members: [member],
+    test("hidden text_link URL is checked", async () => {
+        const newcomer = user(104);
+        await bot.handleUpdate(messageUpdate(30, newcomer, {
+            text: "Открыть",
+            entities: [{
+                offset: 0,
+                length: 7,
+                type: "text_link",
+                url: "https://t.me/+HiddenInvite",
+            }],
         }) as never);
-        await bot.handleUpdate(messageUpdate(31, {
-            from: member,
-            text: "clean message",
-        }) as never);
-
-        db.closeDatabase();
-        db.initDatabase(dbPath);
-
-        await bot.handleUpdate(messageUpdate(32, {
-            from: member,
-            text: "message after restart",
-        }) as never);
-
-        assert.equal(
-            countRows("SELECT COUNT(*) AS cnt FROM message_log WHERE user_id = 1004 AND chat_id = -1000"),
-            1
-        );
-        assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
+        assert.equal(db.isSpammer(104), true);
     });
 
-    test("E2E-05: implicit join — first message from unknown user is checked, second is skipped", async () => {
-        // User 1005 never sent a join event (bot joined after them)
-        await bot.handleUpdate(messageUpdate(40, {
-            from: user(1005),
-            text: "hi from existing member",
+    test("editing either probation message is rechecked after trust", async () => {
+        const newcomer = user(105);
+        await bot.handleUpdate(messageUpdate(40, newcomer, { message_id: 400, text: "clean one" }) as never);
+        await bot.handleUpdate(messageUpdate(41, newcomer, { message_id: 401, text: "clean two" }) as never);
+        assert.equal(db.isTrustedUser(105, -1000), true);
+
+        await bot.handleUpdate(messageUpdate(
+            42, newcomer, { message_id: 400, text: "edited into spam" }, -1000, true
+        ) as never);
+        assert.equal(db.isSpammer(105), true);
+        assert.equal(calls("banChatMember").length, 1);
+    });
+
+    test("sender_chat messages are exempt", async () => {
+        await bot.handleUpdate(messageUpdate(50, user(106), {
+            text: "spam",
+            sender_chat: { id: -9000, type: "channel", title: "Channel" },
         }) as never);
+        assert.equal(db.isSpammer(106), false);
+        assert.equal(calls("banChatMember").length, 0);
+    });
 
-        // Should register as implicit join and approve clean message
-        assert.equal(db.isNewUser(1005, -1000), false);
-        assert.equal(db.isSpammer(1005), false);
-        assert.equal(
-            countRows("SELECT COUNT(*) AS cnt FROM message_log WHERE user_id = 1005 AND chat_id = -1000"),
-            1
-        );
+    test("rejoin does not reset trust", async () => {
+        const newcomer = user(107);
+        await bot.handleUpdate(messageUpdate(60, newcomer, { text: "one" }) as never);
+        await bot.handleUpdate(messageUpdate(61, newcomer, { text: "two" }) as never);
+        await bot.handleUpdate(joinUpdate(62, newcomer) as never);
+        assert.equal(db.isTrustedUser(107, -1000), true);
+        assert.equal(db.getChatUserState(107, -1000).approvedMessages, 2);
+    });
 
-        // Second message should be skipped entirely
-        await bot.handleUpdate(messageUpdate(41, {
-            from: user(1005),
-            text: "second message",
+    test("spammer status is global across chats", async () => {
+        const spammer = user(108);
+        await bot.handleUpdate(messageUpdate(70, spammer, { text: "spam" }, -1000) as never);
+        apiCalls = [];
+        await bot.handleUpdate(messageUpdate(71, spammer, { text: "hello" }, -2000) as never);
+        assert.equal(calls("banChatMember").length, 1);
+        assert.equal(calls("banChatMember")[0].payload.chat_id, -2000);
+    });
+
+    test("custom administrators are local to their chat", async () => {
+        await bot.handleUpdate(messageUpdate(80, user(9001), {
+            text: "/addadmin 2001",
+            entities: [{ offset: 0, length: 9, type: "bot_command" }],
         }) as never);
+        assert.equal(db.isChatAdmin(2001, -1000), true);
+        assert.equal(db.isChatAdmin(2001, -2000), false);
 
-        assert.equal(
-            countRows("SELECT COUNT(*) AS cnt FROM message_log WHERE user_id = 1005 AND chat_id = -1000"),
-            1
-        );
-        assert.equal(apiCalls.filter((x) => x.method === "banChatMember").length, 0);
+        apiCalls = [];
+        await bot.handleUpdate(messageUpdate(81, user(2001), {
+            text: "/status",
+            entities: [{ offset: 0, length: 7, type: "bot_command" }],
+        }) as never);
+        assert.equal(calls("sendMessage").length, 1);
+
+        apiCalls = [];
+        await bot.handleUpdate(messageUpdate(82, user(2001), {
+            text: "/status",
+            entities: [{ offset: 0, length: 7, type: "bot_command" }],
+        }, -2000) as never);
+        assert.equal(calls("sendMessage").length, 0);
+        assert.equal(db.getChatUserState(2001, -2000).approvedMessages, 1);
+    });
+
+    test("a local administrator can add a global blacklist entry without managing another chat", async () => {
+        await bot.handleUpdate(messageUpdate(85, user(9001), {
+            text: "/addadmin 2101",
+            entities: [{ offset: 0, length: 9, type: "bot_command" }],
+        }) as never);
+        await bot.handleUpdate(messageUpdate(86, user(2101), {
+            text: "/spam 3101 cross-chat abuse",
+            entities: [{ offset: 0, length: 5, type: "bot_command" }],
+        }) as never);
+        assert.equal(db.isBlacklisted(3101), true);
+
+        apiCalls = [];
+        await bot.handleUpdate(messageUpdate(87, user(3101), { text: "hello" }, -2000) as never);
+        assert.equal(calls("banChatMember").length, 1);
+        assert.equal(calls("banChatMember")[0].payload.chat_id, -2000);
+    });
+
+    test("unauthorized commands continue through anti-spam", async () => {
+        await bot.handleUpdate(messageUpdate(90, user(109), {
+            text: "/status spam",
+            entities: [{ offset: 0, length: 7, type: "bot_command" }],
+        }) as never);
+        assert.equal(db.isSpammer(109), true);
+        assert.equal(calls("banChatMember").length, 1);
+    });
+
+    test("duplicate update_id is processed only once", async () => {
+        const update = messageUpdate(100, user(110), { text: "clean" });
+        await bot.handleUpdate(update as never);
+        await bot.handleUpdate(update as never);
+        assert.equal(db.getChatUserState(110, -1000).approvedMessages, 1);
+    });
+
+    test("Telegram ban/delete failures are logged without losing the spam decision", async () => {
+        failingMethods.add("banChatMember");
+        failingMethods.add("deleteMessage");
+        await assert.doesNotReject(() => bot.handleUpdate(
+            messageUpdate(110, user(111), { text: "spam" }) as never
+        ));
+        assert.equal(db.isSpammer(111), true);
     });
 });

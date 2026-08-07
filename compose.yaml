@@ -1,0 +1,30 @@
+services:
+  bot:
+    build:
+      context: .
+    image: vahterbot:local
+    env_file:
+      - .env
+    init: true
+    restart: unless-stopped
+    read_only: true
+    stop_grace_period: 30s
+    cpus: 0.5
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - vahter-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  vahter-data:
+    name: vahter-data

@@ -1,5 +1,6 @@
 import type { Context } from "grammy";
 import * as db from "../db";
+import { sendAlert } from "../alerts";
 import { logger, serializeError } from "../logger";
 import {
     getContextLogFields,
@@ -9,8 +10,8 @@ import {
 /**
  * Handles `chat_member` updates and `message:new_chat_members` events.
  *
- * 1. If user is blacklisted → ban immediately
- * 2. Otherwise → register in new_users table
+ * 1. If user is globally blacklisted or a known spammer → ban immediately.
+ * 2. Otherwise ensure per-chat probation state without resetting existing trust.
  */
 export async function handleNewMember(ctx: Context): Promise<void> {
     // Determine user and chat from chat_member update or new_chat_members message
@@ -28,10 +29,13 @@ export async function handleNewMember(ctx: Context): Promise<void> {
             return;
         }
 
-        // Only react when someone joins (member, restricted, or administrator)
+        // React only to an actual transition from outside the chat to an active status.
         const joinStatuses = new Set(["member", "restricted", "administrator"]);
-        if (!joinStatuses.has(member.status)) {
+        const previousStatus = ctx.chatMember.old_chat_member.status;
+        const wasOutside = previousStatus === "left" || previousStatus === "kicked";
+        if (!joinStatuses.has(member.status) || !wasOutside) {
             logDecision(ctx, "skip", "not_a_join_transition", {
+                previous_member_status: previousStatus,
                 member_status: member.status,
             });
             return;
@@ -95,9 +99,11 @@ async function processJoin(
 ): Promise<void> {
     const displayName = username ? `@${username}` : firstName ?? String(userId);
 
-    // Check blacklist first
-    if (db.isBlacklisted(userId)) {
-        logDecision(ctx, "ban", "blacklisted_user_joined", {
+    // Global lists always win, including when the user joins another chat.
+    if (db.isBlacklisted(userId) || db.isSpammer(userId)) {
+        logDecision(ctx, "ban", db.isBlacklisted(userId)
+            ? "blacklisted_user_joined"
+            : "known_spammer_joined", {
             target_user_id: userId,
             display_name: displayName,
         }, "warn");
@@ -105,11 +111,15 @@ async function processJoin(
         return;
     }
 
-    // Register as a new user
-    db.addNewUser(userId, chatId, username, firstName);
-    logDecision(ctx, "register", "new_user_joined", {
+    // Ensure the per-chat state exists. ON CONFLICT only refreshes profile data,
+    // so a trusted user's rejoin deliberately does not reset trust.
+    db.ensureChatUser(userId, chatId, username, firstName);
+    const state = db.getChatUserState(userId, chatId);
+    logDecision(ctx, "register", state.trusted ? "trusted_user_rejoined" : "new_user_joined", {
         target_user_id: userId,
         display_name: displayName,
+        approved_messages: state.approvedMessages,
+        trusted: state.trusted,
     });
 }
 
@@ -136,6 +146,7 @@ async function banAndCleanup(
             flow: "new_member",
             error: serializeError(err),
         });
+        await sendAlert(`Не удалось забанить ${userId} при входе в чат ${chatId}.`);
     }
 
     // Delete the join message itself if present

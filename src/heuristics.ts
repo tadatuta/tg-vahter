@@ -166,13 +166,14 @@ export function initHeuristics(regexSource: string): void {
         });
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logger.error("Spam regex checks are disabled because the regex is invalid", {
-            event: "heuristics.disabled",
+        logger.error("Spam regex is invalid", {
+            event: "heuristics.initialization_failed",
             reason: "invalid_regex",
             regex_length: regexSource.length,
             error_message: message,
         });
         spamPattern = null;
+        throw new Error(`Invalid spam regex: ${message}`, { cause: err });
     }
 }
 

@@ -1,79 +1,49 @@
-# VahterBot — Implementation Walkthrough
+# VahterBot
 
-## What Was Built
+Антиспам-бот для Telegram на TypeScript, grammY и SQLite. Production runtime — один
+Docker-контейнер на Ubuntu VM с long polling через обязательный proxy.
 
-Anti-spam Telegram bot using **grammY** + **TypeScript** + **SQLite**. Reacts only to each user's first message per chat. Deployed as a **Yandex Cloud Function** (webhook).
+## Правила
 
-## Project Structure
+- Проверяются первые два текстовых сообщения или caption каждого пользователя в чате.
+- Скрытые URL из Telegram entities входят в проверяемый текст.
+- Нетекстовые сообщения не засчитываются.
+- После двух чистых сообщений доверие сохраняется, включая rejoin.
+- Blacklist и spammers глобальны; администраторы локальны для чата.
+- `sender_chat` пропускается.
 
-```
-tg-antispam-bot/
-├── src/
-│   ├── index.ts              # Dual-mode entry: webhook (YCF) / polling (local)
-│   ├── bot.ts                # Bot instance, middleware pipeline
-│   ├── config.ts             # Typed env config with validation
-│   ├── heuristics.ts         # Regex + Unicode spam detection
-│   ├── logger.ts             # File-based structured logger
-│   ├── db/
-│   │   └── index.ts          # SQLite service (WAL, prepared statements)
-│   └── handlers/
-│       ├── newMember.ts      # Join events → blacklist check + registration
-│       ├── message.ts        # First-message pipeline → heuristics → ban/approve
-│       └── admin.ts          # /spam, /unspam, /addadmin, /status commands
-├── package.json
-├── tsconfig.json
-├── .env.example
-└── .gitignore
-```
-
-## Message Processing Pipeline
-
-```mermaid
-flowchart TD
-    A["User sends message"] --> B{"Is bot?"}
-    B -- Yes --> Z["Skip"]
-    B -- No --> C{"Blacklisted?"}
-    C -- Yes --> D["Ban + Delete"]
-    C -- No --> E{"Known user?"}
-    E -- Yes --> Z
-    E -- No --> F{"In new_users?"}
-    F -- No --> G["Register as new user"]
-    G --> H
-    F -- Yes --> H{"Run spam heuristics"}
-    H -- Match --> I["Add to spammers\nBan + Delete"]
-    H -- No match --> J["Remove from new_users\nLog message ✅"]
-```
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **SQLite + WAL mode** | Fast synchronous reads, single-writer safe for serverless |
-| **Prepared statements** | SQL injection prevention + performance |
-| **Dual-mode entry point** | `YCF_RUNTIME` env detection: webhook for production, polling for local dev |
-| **Multi-level admin auth** | `ADMIN_IDS` env → `admins` DB table → Telegram `getChatMember` |
-| **Implicit join detection** | Users who joined before the bot are registered on their first message |
-
-## Build Verification
-
-```
-$ npx tsc --noEmit   → ✅ 0 errors
-$ npx tsc            → ✅ dist/ generated
-```
-
-## How to Run Locally
+## Локальная разработка
 
 ```bash
 cp .env.example .env
-# Fill in BOT_TOKEN, ADMIN_IDS, SPAM_REGEX
+# Для development TELEGRAM_PROXY_URL необязателен.
+npm ci
 npm run dev
 ```
 
-## How to Deploy to Yandex Cloud
+## Проверка
 
-1. Build: `npm run build`
-2. Create a cloud function with Node.js runtime
-3. Set entry point to `dist/index.handler`
-4. Set environment variables (`BOT_TOKEN`, `ADMIN_IDS`, `SPAM_REGEX`, `DB_PATH`)
-5. Mount Object Storage bucket to the container for persistent SQLite
-6. Set webhook: `https://api.telegram.org/bot<TOKEN>/setWebhook?url=<FUNCTION_URL>`
+```bash
+npm run check
+docker compose config --quiet
+docker build -t vahterbot:local .
+```
+
+## Production
+
+```bash
+cp .env.example .env
+chmod 600 .env
+docker compose build
+docker compose up -d
+docker compose logs -f bot
+```
+
+Рабочая база находится в named volume `vahter-data`. Object Storage не монтируется.
+Регулярные backups не настроены по принятому решению владельца.
+
+## Документация
+
+- [Аудит](docs/AUDIT.md)
+- [Принятые решения](docs/DECISIONS.md)
+- [Runbook миграции](docs/MIGRATION.md)

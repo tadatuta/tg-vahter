@@ -3,4 +3,8 @@ dist/
 tmp/
 .env
 *.db
+*.db-shm
+*.db-wal
 *.log
+*.zip
+.DS_Store
