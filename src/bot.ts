@@ -1,5 +1,4 @@
 import { Bot, GrammyError, HttpError } from "grammy";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { initAlerts, markConnectivityFailure, notifyConnectivityRestored, sendAlert } from "./alerts";
 import { loadConfig } from "./config";
 import * as db from "./db";
@@ -33,18 +32,11 @@ try {
     throw error;
 }
 
-const proxyAgent = config.telegramProxyUrl
-    ? new HttpsProxyAgent(config.telegramProxyUrl)
-    : undefined;
-
 export const bot = new Bot(config.botToken, {
-    client: proxyAgent ? {
+    client: {
+        apiRoot: config.telegramApiRoot,
         timeoutSeconds: 40,
-        baseFetchConfig: {
-            agent: proxyAgent,
-            compress: true,
-        },
-    } : undefined,
+    },
 });
 
 initAlerts(bot.api, config.alertChatId);
@@ -98,7 +90,7 @@ logger.info("Bot instance created successfully", {
     event: "bot.initialized",
     mode: "long_polling",
     db_path: config.dbPath,
-    proxy_configured: proxyAgent !== undefined,
+    api_root_configured: config.telegramApiRoot !== undefined,
     alert_chat_configured: config.alertChatId !== undefined,
     duration_ms: Math.round((performance.now() - initializationStartedAt) * 100) / 100,
 });

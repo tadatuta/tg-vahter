@@ -51,7 +51,7 @@ ESLint, TypeScript и 43 исходных теста. Production-зависим�
 
 Рабочая SQLite перенесена на локальный Docker volume, webhook удалён из runtime,
 добавлен long polling, новая мигрируемая схема, две probation-проверки, глобальные
-blacklist/spammers, локальные администраторы, обязательный proxy, graceful shutdown,
+blacklist/spammers, локальные администраторы, обязательный API reverse proxy, graceful shutdown,
 контейнерный security baseline, healthcheck и расширенный набор тестов.
 
 AI-классификатор и содержательная оптимизация regex намеренно исключены из этого

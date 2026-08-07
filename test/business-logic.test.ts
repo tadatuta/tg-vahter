@@ -45,32 +45,49 @@ function setupDb(t: TestContext): string {
 }
 
 describe("configuration", () => {
-    test("production requires an explicit Telegram proxy", (t) => {
+    test("production requires an explicit Telegram API root", (t) => {
         patchEnv(t, {
             NODE_ENV: "production",
             BOT_TOKEN: "token",
             SUPER_ADMIN_IDS: "1",
             SPAM_REGEX: "spam",
+            TELEGRAM_API_ROOT: undefined,
             TELEGRAM_PROXY_URL: undefined,
         });
-        assert.throws(() => loadConfig(), /TELEGRAM_PROXY_URL is required/);
+        assert.throws(() => loadConfig(), /TELEGRAM_API_ROOT is required/);
     });
 
-    test("safe IDs, empty regex, proxy and alert chat are parsed exactly", (t) => {
+    test("safe IDs, empty regex, API root and alert chat are parsed exactly", (t) => {
         patchEnv(t, {
             NODE_ENV: "production",
             BOT_TOKEN: "token",
             SUPER_ADMIN_IDS: "1,2",
             ADMIN_IDS: undefined,
             SPAM_REGEX: "",
-            TELEGRAM_PROXY_URL: "https://proxy.example.com",
+            TELEGRAM_API_ROOT: "https://proxy.example.com/telegram/",
+            TELEGRAM_PROXY_URL: undefined,
             ALERT_CHAT_ID: "-100123",
         });
         const config = loadConfig();
         assert.deepEqual(config.superAdminIds, [1, 2]);
         assert.equal(config.spamRegex, "");
         assert.equal(config.alertChatId, -100123);
-        assert.equal(config.telegramProxyUrl, "https://proxy.example.com/");
+        assert.equal(config.telegramApiRoot, "https://proxy.example.com/telegram");
+    });
+
+    test("production rejects insecure or obsolete proxy configuration", (t) => {
+        patchEnv(t, {
+            NODE_ENV: "production",
+            BOT_TOKEN: "token",
+            SPAM_REGEX: "spam",
+            TELEGRAM_API_ROOT: "http://proxy.example.com",
+            TELEGRAM_PROXY_URL: undefined,
+        });
+        assert.throws(() => loadConfig(), /must use https:\/\/ in production/);
+
+        process.env.TELEGRAM_API_ROOT = "";
+        process.env.TELEGRAM_PROXY_URL = "http://proxy.example.com:8080";
+        assert.throws(() => loadConfig(), /set TELEGRAM_API_ROOT instead/);
     });
 
     test("unsafe or fractional Telegram IDs are rejected", (t) => {

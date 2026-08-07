@@ -10,7 +10,7 @@ export interface Config {
     dbPath: string;
     logFile?: string;
     alertChatId?: number;
-    telegramProxyUrl?: string;
+    telegramApiRoot?: string;
     environment: RuntimeEnvironment;
     logLevel: "info" | "warn" | "error";
 }
@@ -49,18 +49,33 @@ function loadSpamRegex(): string {
     }
 }
 
-function parseProxyUrl(value: string | undefined): string | undefined {
+function parseTelegramApiRoot(
+    value: string | undefined,
+    environment: RuntimeEnvironment
+): string | undefined {
     if (!value?.trim()) return undefined;
+
+    const normalized = value.trim().replace(/\/+$/, "");
     let url: URL;
     try {
-        url = new URL(value);
+        url = new URL(normalized);
     } catch {
-        throw new Error("TELEGRAM_PROXY_URL must be a valid URL");
+        throw new Error("TELEGRAM_API_ROOT must be a valid URL");
     }
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error("TELEGRAM_PROXY_URL must use http:// or https://");
+        throw new Error("TELEGRAM_API_ROOT must use http:// or https://");
     }
-    return url.toString();
+    if (url.username || url.password) {
+        throw new Error("TELEGRAM_API_ROOT must not contain credentials");
+    }
+    if (url.search || url.hash) {
+        throw new Error("TELEGRAM_API_ROOT must not contain query parameters or a fragment");
+    }
+    if (environment === "production" && url.protocol !== "https:") {
+        throw new Error("TELEGRAM_API_ROOT must use https:// in production");
+    }
+
+    return normalized;
 }
 
 export function loadConfig(): Config {
@@ -71,9 +86,18 @@ export function loadConfig(): Config {
     const superAdminIds = parseSuperAdminIds(
         process.env.SUPER_ADMIN_IDS ?? process.env.ADMIN_IDS
     );
-    const telegramProxyUrl = parseProxyUrl(process.env.TELEGRAM_PROXY_URL);
-    if (environment === "production" && !telegramProxyUrl) {
-        throw new Error("TELEGRAM_PROXY_URL is required in production");
+    const telegramApiRoot = parseTelegramApiRoot(
+        process.env.TELEGRAM_API_ROOT,
+        environment
+    );
+    if (environment === "production" && !telegramApiRoot) {
+        if (process.env.TELEGRAM_PROXY_URL) {
+            throw new Error(
+                "TELEGRAM_PROXY_URL is not supported for the configured reverse proxy; " +
+                "set TELEGRAM_API_ROOT instead"
+            );
+        }
+        throw new Error("TELEGRAM_API_ROOT is required in production");
     }
 
     const alertChatId = process.env.ALERT_CHAT_ID
@@ -91,7 +115,7 @@ export function loadConfig(): Config {
         dbPath: process.env.DB_PATH ?? "/data/vahter.db",
         logFile: process.env.LOG_FILE || undefined,
         alertChatId,
-        telegramProxyUrl,
+        telegramApiRoot,
         environment,
         logLevel: rawLogLevel as Config["logLevel"],
     };

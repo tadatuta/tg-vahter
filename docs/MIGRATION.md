@@ -15,7 +15,9 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Заполнить `BOT_TOKEN`, `SUPER_ADMIN_IDS`, `TELEGRAM_PROXY_URL` и `ALERT_CHAT_ID`.
+Заполнить `BOT_TOKEN`, `SUPER_ADMIN_IDS`, `TELEGRAM_API_ROOT` и `ALERT_CHAT_ID`.
+`TELEGRAM_API_ROOT` должен быть HTTPS-корнем reverse proxy без завершающего `/`;
+grammY добавляет путь `/bot<TOKEN>/<METHOD>` самостоятельно.
 Не помещать secrets в image, shell history или Git.
 
 ## 3. Проверка образа
@@ -25,7 +27,8 @@ docker compose build
 docker compose config --quiet
 ```
 
-До production cutover проверить proxy отдельным тестовым токеном либо в тестовом чате.
+До production cutover проверить API reverse proxy отдельным тестовым токеном либо
+в тестовом чате.
 
 ## 4. Остановка старого runtime
 
@@ -51,8 +54,11 @@ docker run --rm \
   -v vahter-data:/data \
   -v /secure/path/to/legacy:/import:ro \
   node:24-bookworm-slim \
-  sh -c 'cp /import/vahter.db /data/vahter.db && chown 1000:1000 /data/vahter.db'
+  sh -c 'cp /import/vahter.db /data/vahter.db && chown 1000:1000 /data /data/vahter.db && chmod 750 /data'
 ```
+
+SQLite создаёт рядом с БД файлы WAL/SHM, поэтому пользователю контейнера `1000:1000`
+должен принадлежать не только `vahter.db`, но и сам каталог `/data`.
 
 При первом запуске приложение транзакционно обновит legacy-схему до версии 2.
 Существующий `message_log` даёт один approved message, а не полное доверие. Legacy

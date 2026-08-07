@@ -114,6 +114,7 @@ describe("production behavior", () => {
         process.env.SPAM_REGEX = "spam";
         process.env.DB_PATH = dbPath;
         process.env.LOG_LEVEL = "error";
+        delete process.env.TELEGRAM_API_ROOT;
         delete process.env.TELEGRAM_PROXY_URL;
         delete process.env.ALERT_CHAT_ID;
 

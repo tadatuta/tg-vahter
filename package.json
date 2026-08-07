@@ -19,8 +19,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
-    "grammy": "^1.45.1",
-    "https-proxy-agent": "^7.0.6"
+    "grammy": "^1.45.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

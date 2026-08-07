@@ -22,7 +22,7 @@ users и delete messages, а BotFather privacy mode должен быть вык
 15. Неавторизованное `/status spam` проходит в anti-spam pipeline.
 16. При снятых правах ban/delete контейнер продолжает работу, пишет error log и alert.
 17. После `docker compose restart bot` состояние SQLite сохраняется.
-18. При недоступном proxy нет прямого fallback к Telegram; ошибка видна в Docker logs.
+18. При недоступном API reverse proxy нет прямого fallback к Telegram; ошибка видна в Docker logs.
 19. SIGTERM завершается через graceful shutdown без повреждения SQLite.
 
 Подробный cutover и rollback описаны в [`docs/MIGRATION.md`](docs/MIGRATION.md).

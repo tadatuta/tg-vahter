@@ -33,8 +33,9 @@
 - Ubuntu 26.04 LTS на Yandex Compute Cloud.
 - Базовая VM: 2 vCPU 20%, 2 GB RAM, network SSD 10–20 GB.
 - SQLite хранится только в локальном named volume `/data`.
-- Telegram API доступен через обязательный HTTP(S)-proxy без авторизации.
-- При недоступности proxy применяются backoff/restart и локальное логирование.
+- Telegram API доступен через обязательный HTTPS reverse proxy без авторизации,
+  настроенный как grammY `apiRoot`.
+- При недоступности API reverse proxy применяются backoff/restart и локальное логирование.
 - Логи — JSON в stdout/stderr с Docker rotation.
 - Операционные алерты отправляются в отдельный Telegram-чат.
 - Secrets передаются через `.env` на VM с правами `0600` и не входят в image/Git.

@@ -1,7 +1,8 @@
 # VahterBot
 
 Антиспам-бот для Telegram на TypeScript, grammY и SQLite. Production runtime — один
-Docker-контейнер на Ubuntu VM с long polling через обязательный proxy.
+Docker-контейнер на Ubuntu VM с long polling через обязательный Telegram Bot API
+reverse proxy.
 
 ## Правила
 
@@ -16,7 +17,7 @@ Docker-контейнер на Ubuntu VM с long polling через обязат
 
 ```bash
 cp .env.example .env
-# Для development TELEGRAM_PROXY_URL необязателен.
+# Для development TELEGRAM_API_ROOT необязателен.
 npm ci
 npm run dev
 ```

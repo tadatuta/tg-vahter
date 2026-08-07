@@ -11,7 +11,7 @@ docker build -t vahterbot:test .
 
 ## Покрытые инварианты
 
-- production требует proxy;
+- production требует HTTPS `TELEGRAM_API_ROOT`;
 - Telegram IDs валидируются как safe integers;
 - invalid regex останавливает запуск;
 - два уникальных clean messages дают trust;

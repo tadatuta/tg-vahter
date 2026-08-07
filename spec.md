@@ -9,7 +9,7 @@
 - TypeScript, grammY, better-sqlite3.
 - Node.js 24 LTS.
 - Один Docker-контейнер на Ubuntu 26.04 LTS VM.
-- Long polling через обязательный HTTP(S)-proxy.
+- Long polling через обязательный HTTPS reverse proxy Telegram Bot API (`apiRoot`).
 - Локальный persistent Docker volume для SQLite.
 - JSON logs в stdout/stderr и Telegram operational alerts.
 
