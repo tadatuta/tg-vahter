@@ -8,6 +8,7 @@ import { flushLogger } from "../src/logger";
 
 type DbModule = typeof import("../src/db");
 type BotModule = typeof import("../src/bot");
+type AlertsModule = typeof import("../src/alerts");
 type ApiCall = { method: string; payload: Record<string, unknown> };
 
 const sandboxDir = mkdtempSync(path.join(tmpdir(), "vahter-e2e-"));
@@ -15,6 +16,7 @@ const dbPath = path.join(sandboxDir, "e2e.db");
 
 let bot: Bot;
 let db: DbModule;
+let alerts: AlertsModule;
 let apiCalls: ApiCall[] = [];
 let failingMethods = new Set<string>();
 
@@ -119,6 +121,7 @@ describe("production behavior", () => {
         delete process.env.ALERT_CHAT_ID;
 
         db = await import("../src/db");
+        alerts = await import("../src/alerts");
         const botModule = await import("../src/bot") as BotModule;
         bot = botModule.bot;
         installApiInterceptor();
@@ -129,6 +132,7 @@ describe("production behavior", () => {
         apiCalls = [];
         failingMethods = new Set();
         resetDatabase();
+        alerts.initAlerts(bot.api, undefined);
     });
 
     after(async () => {
@@ -146,6 +150,42 @@ describe("production behavior", () => {
         assert.equal(db.isSpammer(101), true);
         assert.equal(calls("banChatMember").length, 1);
         assert.equal(calls("deleteMessage").length, 1);
+    });
+
+    test("successful spam ban sends an alert with its reason and message quote", async () => {
+        alerts.initAlerts(bot.api, -9999);
+
+        await bot.handleUpdate(messageUpdate(5, user(120), { text: "buy spam now" }) as never);
+
+        const alertCall = calls("sendMessage").find((call) => call.payload.chat_id === -9999);
+        assert.ok(alertCall);
+        assert.match(String(alertCall.payload.text), /^✅ VahterBot/);
+        assert.match(String(alertCall.payload.text), /Пользователь @u120 \(120\) успешно забанен/);
+        assert.match(String(alertCall.payload.text), /Причина: Сработала антиспам-эвристика/);
+        assert.match(String(alertCall.payload.text), /Цитата сообщения:\n«buy spam now»/);
+    });
+
+    test("manual reply ban alert uses the administrator reason and replied message", async () => {
+        alerts.initAlerts(bot.api, -9999);
+        const repliedMessage = {
+            message_id: 600,
+            date: 1_700_000_000,
+            chat: { id: -1000, type: "supergroup", title: "Chat -1000" },
+            from: user(121),
+            text: "manual spam sample",
+        };
+
+        await bot.handleUpdate(messageUpdate(6, user(9001), {
+            text: "/spam реклама",
+            entities: [{ offset: 0, length: 5, type: "bot_command" }],
+            reply_to_message: repliedMessage,
+        }) as never);
+
+        const alertCall = calls("sendMessage").find((call) => call.payload.chat_id === -9999);
+        assert.ok(alertCall);
+        assert.match(String(alertCall.payload.text), /Пользователь @u121 \(121\) успешно забанен/);
+        assert.match(String(alertCall.payload.text), /Причина: реклама/);
+        assert.match(String(alertCall.payload.text), /Цитата сообщения:\n«manual spam sample»/);
     });
 
     test("two clean messages grant trust and third message is ignored", async () => {

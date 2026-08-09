@@ -21,6 +21,11 @@ export interface Stats {
     blacklist: number;
 }
 
+export interface GlobalBanReason {
+    source: "blacklist" | "spammer";
+    reason: string;
+}
+
 let db: Database.Database | undefined;
 let statements: ReturnType<typeof prepareStatements> | undefined;
 
@@ -228,6 +233,12 @@ function prepareStatements() {
         isSpammer: database.prepare<[number], { found: number }>(
             "SELECT 1 AS found FROM spammers WHERE user_id = ? LIMIT 1"
         ),
+        getBlacklistReason: database.prepare<[number], { reason: string }>(
+            "SELECT reason FROM blacklist WHERE user_id = ?"
+        ),
+        getSpammerReason: database.prepare<[number], { reason: string }>(
+            "SELECT reason FROM spammers WHERE user_id = ?"
+        ),
         getChatUser: database.prepare<[number, number], {
             approved_messages: number;
             trusted_at: number | null;
@@ -351,6 +362,15 @@ export function isBlacklisted(userId: number): boolean {
 
 export function isSpammer(userId: number): boolean {
     return stmts().isSpammer.get(userId)?.found === 1;
+}
+
+export function getGlobalBanReason(userId: number): GlobalBanReason | undefined {
+    const blacklist = stmts().getBlacklistReason.get(userId);
+    if (blacklist) return { source: "blacklist", reason: blacklist.reason };
+
+    const spammer = stmts().getSpammerReason.get(userId);
+    if (spammer) return { source: "spammer", reason: spammer.reason };
+    return undefined;
 }
 
 export function ensureChatUser(

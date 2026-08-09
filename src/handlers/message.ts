@@ -1,7 +1,7 @@
 import type { Context } from "grammy";
 import * as db from "../db";
-import { sendAlert } from "../alerts";
-import { getSpamHeuristic } from "../heuristics";
+import { sendAlert, sendSuccessfulBanAlert } from "../alerts";
+import { getSpamHeuristic, type SpamHeuristic } from "../heuristics";
 import { logger, serializeError } from "../logger";
 import { getContextLogFields, logDecision } from "../observability";
 
@@ -9,6 +9,13 @@ interface ExtractedContent {
     text?: string;
     type: "text" | "caption" | "non_text";
 }
+
+const SPAM_HEURISTIC_REASONS: Record<SpamHeuristic, string> = {
+    telegram_private_invite_link: "приватная ссылка-приглашение Telegram",
+    disallowed_unicode_control: "недопустимые управляющие Unicode-символы",
+    mixed_latin_cyrillic_word: "смешение латиницы и кириллицы в одном слове",
+    configured_regex: "совпадение с настроенным spam-регулярным выражением",
+};
 
 export function extractContent(message: NonNullable<Context["msg"]>): ExtractedContent {
     const visibleText = message.text ?? message.caption;
@@ -62,15 +69,26 @@ export async function handleMessage(ctx: Context): Promise<void> {
     const messageId = message.message_id;
     const displayName = user.username ? `@${user.username}` : user.first_name;
     const edited = ctx.update.edited_message !== undefined;
+    const content = extractContent(message);
 
     if (db.isBlacklisted(userId)) {
         logDecision(ctx, "ban", "blacklisted_user", { display_name: displayName }, "warn");
-        await banAndDeleteMessage(ctx, userId, chatId, messageId);
+        const banReason = db.getGlobalBanReason(userId);
+        await banAndDeleteMessage(ctx, userId, chatId, messageId, {
+            displayName,
+            reason: banReason?.reason ?? "Пользователь находится в глобальном чёрном списке.",
+            quote: content.text,
+        });
         return;
     }
     if (db.isSpammer(userId)) {
         logDecision(ctx, "ban", "known_global_spammer", { display_name: displayName }, "warn");
-        await banAndDeleteMessage(ctx, userId, chatId, messageId);
+        const banReason = db.getGlobalBanReason(userId);
+        await banAndDeleteMessage(ctx, userId, chatId, messageId, {
+            displayName,
+            reason: banReason?.reason ?? "Пользователь ранее распознан как спамер.",
+            quote: content.text,
+        });
         return;
     }
 
@@ -85,7 +103,6 @@ export async function handleMessage(ctx: Context): Promise<void> {
         return;
     }
 
-    const content = extractContent(message);
     if (!content.text) {
         logDecision(ctx, "skip", "non_text_does_not_count", {
             display_name: displayName,
@@ -96,7 +113,7 @@ export async function handleMessage(ctx: Context): Promise<void> {
 
     const spamHeuristic = getSpamHeuristic(content.text);
     if (spamHeuristic) {
-        const reason = `Spam heuristic match (${spamHeuristic}): "${content.text.slice(0, 200)}"`;
+        const reason = `Сработала антиспам-эвристика: ${SPAM_HEURISTIC_REASONS[spamHeuristic]}.`;
         db.recordSpammer({
             updateId: ctx.update.update_id,
             messageId,
@@ -114,7 +131,11 @@ export async function handleMessage(ctx: Context): Promise<void> {
             spam_heuristic: spamHeuristic,
             text_preview: content.text.slice(0, 200),
         }, "warn");
-        await banAndDeleteMessage(ctx, userId, chatId, messageId);
+        await banAndDeleteMessage(ctx, userId, chatId, messageId, {
+            displayName,
+            reason,
+            quote: content.text,
+        });
         return;
     }
 
@@ -152,10 +173,13 @@ async function banAndDeleteMessage(
     ctx: Context,
     userId: number,
     chatId: number,
-    messageId: number
+    messageId: number,
+    alert: { displayName?: string; reason: string; quote?: string }
 ): Promise<void> {
+    let banSucceeded = false;
     try {
         await ctx.api.banChatMember(chatId, userId);
+        banSucceeded = true;
         logger.info("User ban succeeded", {
             event: "telegram_api.ban_chat_member",
             ...getContextLogFields(ctx),
@@ -188,5 +212,9 @@ async function banAndDeleteMessage(
             error: serializeError(error),
         });
         await sendAlert(`Не удалось удалить сообщение ${ctx.msg?.message_id} в чате ${chatId}.`);
+    }
+
+    if (banSucceeded) {
+        await sendSuccessfulBanAlert({ userId, chatId, ...alert });
     }
 }

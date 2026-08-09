@@ -1,6 +1,6 @@
 import type { Context, NextFunction } from "grammy";
 import * as db from "../db";
-import { sendAlert } from "../alerts";
+import { sendAlert, sendSuccessfulBanAlert } from "../alerts";
 import { logger, serializeError } from "../logger";
 import { getContextLogFields, logDecision } from "../observability";
 
@@ -67,7 +67,8 @@ export async function handleSpam(ctx: Context, next?: NextFunction): Promise<voi
     const parts = (ctx.msg?.text ?? "").trim().split(/\s+/);
     const targetUserId = reply?.from?.id ?? parseUserId(parts[1]);
     const reasonStart = reply?.from ? 1 : 2;
-    const reason = parts.slice(reasonStart).join(" ") || "Manual global ban by chat admin";
+    const reason = parts.slice(reasonStart).join(" ") ||
+        "Ручная глобальная блокировка администратором чата.";
 
     if (!targetUserId) {
         logDecision(ctx, "skip", "invalid_command_arguments", { command: "spam" });
@@ -98,6 +99,16 @@ export async function handleSpam(ctx: Context, next?: NextFunction): Promise<voi
 
     try {
         await ctx.api.banChatMember(chatId, targetUserId);
+        const targetDisplayName = reply?.from?.username
+            ? `@${reply.from.username}`
+            : reply?.from?.first_name;
+        await sendSuccessfulBanAlert({
+            userId: targetUserId,
+            chatId,
+            displayName: targetDisplayName,
+            reason,
+            quote: reply?.text ?? reply?.caption,
+        });
     } catch (error) {
         logger.error("Admin-requested user ban failed", {
             event: "telegram_api.ban_chat_member",

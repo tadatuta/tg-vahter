@@ -1,6 +1,6 @@
 import type { Context } from "grammy";
 import * as db from "../db";
-import { sendAlert } from "../alerts";
+import { sendAlert, sendSuccessfulBanAlert } from "../alerts";
 import { logger, serializeError } from "../logger";
 import {
     getContextLogFields,
@@ -100,14 +100,20 @@ async function processJoin(
     const displayName = username ? `@${username}` : firstName ?? String(userId);
 
     // Global lists always win, including when the user joins another chat.
-    if (db.isBlacklisted(userId) || db.isSpammer(userId)) {
-        logDecision(ctx, "ban", db.isBlacklisted(userId)
+    const blacklisted = db.isBlacklisted(userId);
+    const knownSpammer = db.isSpammer(userId);
+    if (blacklisted || knownSpammer) {
+        logDecision(ctx, "ban", blacklisted
             ? "blacklisted_user_joined"
             : "known_spammer_joined", {
             target_user_id: userId,
             display_name: displayName,
         }, "warn");
-        await banAndCleanup(ctx, userId, chatId);
+        const banReason = db.getGlobalBanReason(userId);
+        await banAndCleanup(ctx, userId, chatId, displayName,
+            banReason?.reason ?? (blacklisted
+                ? "Пользователь находится в глобальном чёрном списке."
+                : "Пользователь ранее распознан как спамер."));
         return;
     }
 
@@ -126,7 +132,9 @@ async function processJoin(
 async function banAndCleanup(
     ctx: Context,
     userId: number,
-    chatId: number
+    chatId: number,
+    displayName: string,
+    reason: string
 ): Promise<void> {
     try {
         await ctx.api.banChatMember(chatId, userId);
@@ -136,6 +144,13 @@ async function banAndCleanup(
             target_user_id: userId,
             outcome: "success",
             flow: "new_member",
+        });
+        await sendSuccessfulBanAlert({
+            userId,
+            chatId,
+            displayName,
+            reason,
+            quote: "[бан при входе; пользователь ещё не отправлял сообщение]",
         });
     } catch (err) {
         logger.error("Joined user ban failed", {

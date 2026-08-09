@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { describe, type TestContext } from "node:test";
 import Database from "better-sqlite3";
+import { formatSuccessfulBanAlert } from "../src/alerts";
 import { loadConfig } from "../src/config";
 import * as db from "../src/db";
 import {
@@ -163,6 +164,22 @@ describe("content extraction", () => {
     });
 });
 
+describe("alerts", () => {
+    test("successful ban alert includes the user, reason and a safe message quote", () => {
+        const alert = formatSuccessfulBanAlert({
+            userId: 42,
+            chatId: -100500,
+            displayName: "@spammer",
+            reason: "Сработала антиспам-эвристика.",
+            quote: "невидимый\u202Eтекст",
+        });
+
+        assert.match(alert, /Пользователь @spammer \(42\) успешно забанен/);
+        assert.match(alert, /Причина: Сработала антиспам-эвристика\./);
+        assert.match(alert, /Цитата сообщения:\n«невидимый\\u\{202E\}текст»/);
+    });
+});
+
 describe("database", () => {
     test("two unique approved messages grant permanent per-chat trust", (t) => {
         setupDb(t);
@@ -208,6 +225,8 @@ describe("database", () => {
         db.initDatabase(dbPath);
         assert.equal(db.isSpammer(20), true);
         assert.equal(db.isBlacklisted(21), true);
+        assert.deepEqual(db.getGlobalBanReason(20), { source: "spammer", reason: "test" });
+        assert.deepEqual(db.getGlobalBanReason(21), { source: "blacklist", reason: "manual" });
     });
 
     test("update IDs are claimed only once", (t) => {
